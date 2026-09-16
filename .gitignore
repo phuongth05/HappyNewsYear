@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+artifacts/
+runs/
+
+# Local datasets and downloaded model assets
+data/
+checkpoints/
+models/
+cache/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Local environment and editor state
+.env
+.env.*
+.venv/
+venv/
+.vscode/
+.idea/

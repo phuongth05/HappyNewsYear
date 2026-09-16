@@ -1,0 +1,39 @@
+experiment: B0_image_only
+seed: 2026
+
+dataset:
+  name: goodnews
+  config: ../dataset/goodnews.example.yaml
+  split: dev
+  max_samples: 10
+  subset_strategy: first_by_sample_id
+
+# BLIP-2/InstructBLIP are available in Transformers, but are not practical on
+# this CPU-only host. This pinned BLIP checkpoint supports true unconditional
+# image captioning and does not require fine-tuning.
+model:
+  type: blip
+  name: Salesforce/blip-image-captioning-base
+  revision: 82a37760796d32b1411fe092ab5d4e227313294b
+  device: auto
+  dtype: float32
+  batch_size: 1
+
+generation:
+  do_sample: false
+  num_beams: 3
+  max_new_tokens: 30
+  min_new_tokens: 1
+  no_repeat_ngram_size: 2
+  length_penalty: 1.0
+  early_stopping: true
+
+output_dir: ../../runs/b0_image_only/dev_smoke
+
+# The exact saved-prediction evaluator is invoked after generation. CIDEr is
+# the lightweight smoke metric; run the full suite separately when its model
+# weights, NER model, and SPICE Java resources are installed.
+evaluation:
+  enabled: true
+  metrics: [cider]
+  allow_metric_errors: false

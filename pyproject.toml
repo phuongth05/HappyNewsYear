@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kric"
+version = "0.1.0"
+description = "Knowledge-rich image captioning research utilities"
+requires-python = ">=3.10"
+dependencies = [
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+coco-eval = [
+  "pycocoevalcap==1.2",
+]
+clipscore = [
+  "Pillow>=10.0",
+  "torch>=2.0",
+  "transformers>=4.36",
+]
+captioning = [
+  "Pillow>=10.0",
+  "torch>=2.0",
+  "transformers>=4.36",
+]
+ner = [
+  "spacy>=3.7",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"

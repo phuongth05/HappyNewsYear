@@ -1,0 +1,2 @@
+{"sample_id":"example-1","prediction":"Alice Rivera spoke in Paris.","reference":"Alice Rivera addressed reporters in Paris.","metadata":{"prediction_entities":[{"text":"Alice Rivera","label":"PERSON"},{"text":"Paris","label":"GPE"}],"reference_entities":[{"text":"Alice Rivera","label":"PERSON"},{"text":"Paris","label":"GPE"}]}}
+{"sample_id":"example-2","prediction":"The delegation met in London.","reference":"The delegation met officials in Berlin.","metadata":{"prediction_entities":[{"text":"London","label":"GPE"}],"reference_entities":[{"text":"Berlin","label":"GPE"}]}}
