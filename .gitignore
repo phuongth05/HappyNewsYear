@@ -10,7 +10,7 @@ artifacts/
 runs/
 
 # Local datasets and downloaded model assets
-data/
+/data/
 checkpoints/
 models/
 cache/

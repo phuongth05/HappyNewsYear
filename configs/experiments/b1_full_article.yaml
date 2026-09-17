@@ -1,0 +1,52 @@
+experiment: B1_full_article
+# Exploratory/legacy: article text is a long BLIP decoder prefix. This file is
+# retained for reproducibility, not as the definitive B1 baseline.
+seed: 2026
+
+dataset:
+  name: goodnews
+  config: ../dataset/goodnews.example.yaml
+  split: dev
+  max_samples: 50
+  subset_strategy: first_by_sample_id
+
+# These fields intentionally match B0 exactly.
+model:
+  type: blip
+  name: Salesforce/blip-image-captioning-base
+  revision: 82a37760796d32b1411fe092ab5d4e227313294b
+  device: auto
+  dtype: float32
+  batch_size: 1
+
+generation:
+  do_sample: false
+  num_beams: 3
+  max_new_tokens: 30
+  min_new_tokens: 1
+  no_repeat_ngram_size: 2
+  length_penalty: 1.0
+  early_stopping: true
+
+# Keep the leading tokens because news articles generally put the most salient
+# facts first. The article is used verbatim and never selected using captions.
+context:
+  max_article_tokens: 256
+  truncation: head
+
+output_dir: ../../runs/goodnews_validation_50/b1
+
+evaluation:
+  enabled: true
+  metrics: [cider, entity]
+  allow_metric_errors: false
+  entity_extractor: spacy
+  spacy_model: en_core_web_sm
+
+comparison:
+  baseline_config: b0_image_only.yaml
+  baseline_per_sample: ../../runs/goodnews_validation_50/b0/metrics_per_sample.csv
+  metrics: [CIDEr, EntityPrecision, EntityRecall, EntityF1]
+  confidence: 0.95
+  resamples: 10000
+  seed: 2026

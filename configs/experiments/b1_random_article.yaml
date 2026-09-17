@@ -1,6 +1,5 @@
-experiment: B0_image_only
-# Exploratory/legacy BLIP baseline. Use b0_instructblip_image_only.yaml for the
-# controlled definitive B0/B1 comparison.
+experiment: B1_random_article
+# Exploratory/legacy BLIP decoder-prefix sanity control.
 seed: 2026
 
 dataset:
@@ -10,9 +9,6 @@ dataset:
   max_samples: 50
   subset_strategy: first_by_sample_id
 
-# BLIP-2/InstructBLIP are available in Transformers, but are not practical on
-# this CPU-only host. This pinned BLIP checkpoint supports true unconditional
-# image captioning and does not require fine-tuning.
 model:
   type: blip
   name: Salesforce/blip-image-captioning-base
@@ -30,13 +26,23 @@ generation:
   length_penalty: 1.0
   early_stopping: true
 
-output_dir: ../../runs/goodnews_validation_50/b0
+context:
+  max_article_tokens: 256
+  truncation: head
 
-# B0 and B1 use this identical evaluator configuration. Entity metrics use a
-# fixed caption-side NER model and never feed reference entities to generation.
+output_dir: ../../runs/goodnews_validation_50/b1_random
+
 evaluation:
   enabled: true
   metrics: [cider, entity]
   allow_metric_errors: false
   entity_extractor: spacy
   spacy_model: en_core_web_sm
+
+comparison:
+  baseline_config: b0_image_only.yaml
+  baseline_per_sample: ../../runs/goodnews_validation_50/b0/metrics_per_sample.csv
+  metrics: [CIDEr, EntityPrecision, EntityRecall, EntityF1]
+  confidence: 0.95
+  resamples: 10000
+  seed: 2026

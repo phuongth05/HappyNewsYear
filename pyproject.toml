@@ -24,9 +24,10 @@ clipscore = [
   "transformers>=4.36",
 ]
 captioning = [
+  "accelerate>=0.26",
   "Pillow>=10.0",
   "torch>=2.0",
-  "transformers>=4.36",
+  "transformers>=4.46,<5",
 ]
 ner = [
   "spacy>=3.7",

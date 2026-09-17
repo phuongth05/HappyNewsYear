@@ -1,24 +1,26 @@
-dataset: goodnews
+dataset:
+  name: goodnews
 
-# Relative root_dir values are resolved from this config file's directory.
-root_dir: ../../data/goodnews
-annotations_path: article+caption.json
-splits_path: img_splits.json
-images_root: images
+  # May point outside the repository, for example D:/Datasets/GoodNews.
+  # Relative paths are resolved from this config file's directory.
+  root: D:/KIEMCOM/HK1-N4/KLTN/Datasets/GoodNews
+  annotations_path: article+caption.json
+  splits_path: img_splits.json
+  images_root: images
 
-image_extension: .jpg
-long_article_words: 2500
-max_issue_examples: 20
+  image_extension: .jpg
+  long_article_words: 2500
+  max_issue_examples: 20
 
 # The official release has appeared in a few closely related JSON layouts.
 # These aliases keep format differences in configuration, not model code.
-article_fields: [article, article_text, text, body]
-images_fields: [images]
-caption_fields: [caption, raw, text]
-image_path_fields: [image_path, filename, filepath]
-entity_fields: [entities, named_entities]
-metadata_fields: [headline, url, web_url, date, pub_date, section]
+  article_fields: [article, article_text, text, body]
+  images_fields: [images]
+  caption_fields: [caption, raw, text]
+  image_path_fields: [image_path, filename, filepath]
+  entity_fields: [entities, named_entities]
+  metadata_fields: [headline, url, web_url, date, pub_date, section]
 
 # Use article_ner only if entities were computed exclusively from the article.
 # Entities are never included in InferenceSample while provenance is unknown.
-entities_source: unknown
+  entities_source: unknown

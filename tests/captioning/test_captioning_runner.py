@@ -106,6 +106,8 @@ def test_runner_passes_only_image_contract_and_writes_evaluator_format(tmp_path:
     assert (config.output_dir / "generation_config.json").is_file()
     assert (config.output_dir / "token_settings.json").is_file()
     assert (config.output_dir / "runtime.json").is_file()
+    assert (config.output_dir / "resolved_config.json").is_file()
+    assert (config.output_dir / "gpu_memory.json").is_file()
 
 
 def test_runner_evaluates_the_saved_prediction_artifact(tmp_path: Path, monkeypatch) -> None:

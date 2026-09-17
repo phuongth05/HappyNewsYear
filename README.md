@@ -21,23 +21,45 @@ need to be changed. Relative data paths are resolved from the config file.
 The official `val` split is exposed to project code as `dev`; it is never
 regenerated.
 
+See `docs/goodnews_setup.md` for the exact consumed JSON layout, official
+acquisition routes, current SharePoint-access limitation, and preflight audit.
+
 ## Audit
 
 ```powershell
 python scripts/audit_dataset.py `
   --dataset goodnews `
-  --config configs/dataset/goodnews.example.yaml `
-  --output artifacts/dataset_audits/goodnews.json
+  --root "D:/Datasets/GoodNews" `
+  --output artifacts/dataset_audits/goodnews_validation.json `
+  --check-only `
+  --fail-on-issues
 ```
 
-Add `--fail-on-issues` in CI when missing, empty, duplicate, long-article, or
-split-integrity findings should produce a non-zero exit code.
+Remove `--check-only` after validation to compute tokenizer-exact statistics
+for the real release. This loads only the pinned InstructBLIP processor and
+tokenizer, not model weights. See `docs/goodnews_setup.md` for the full list of
+checks and external-root configuration.
+
+For a faster experiment preflight, verify all metadata and paths but decode a
+fixed sample of images, then validate the exact 50 experiment samples:
+
+```powershell
+python scripts/audit_dataset.py --dataset goodnews --root "D:/KIEMCOM/HK1-N4/KLTN/Datasets/GoodNews" --quick --verify-images 10000 --output artifacts/dataset_audits/goodnews_quick.json --fail-on-issues
+python scripts/audit_experiment_subset.py --dataset-root "D:/KIEMCOM/HK1-N4/KLTN/Datasets/GoodNews" --split dev --max-samples 50 --selection first_by_sample_id
+```
 
 ## Tests
 
 ```powershell
 python -m pytest
 ```
+
+## Kaggle: controlled GoodNews validation
+
+The CUDA workflow for the fixed 50-sample B0/B1/B1-random validation is
+documented in `docs/kaggle_goodnews_validation.md`. It accepts the attached
+dataset location through `--dataset-root`; no Kaggle dataset slug is embedded
+in code or configuration.
 
 Model and evidence code must consume `InferenceSample`, obtained through
 `DatasetAdapter.iter_inference_samples`. It contains neither the reference
@@ -87,7 +109,7 @@ unless `--allow-metric-errors` is intentionally supplied.
 The B0 runner uses pinned unconditional BLIP generation. Its model-facing
 `ImageOnlyInput` contains only `sample_id` and `image_path`; the adapter also
 rejects processor outputs containing text-token keys. The default config is a
-deterministic ten-sample development smoke run:
+deterministic 50-sample development validation run:
 
 ```powershell
 python scripts/run_captioning.py `
@@ -99,3 +121,50 @@ runner writes predictions in the unified evaluator format, invokes that same
 saved-file evaluator, and records the resolved config, model revision,
 generation/token settings, runtime, Git state, metrics, and ten qualitative
 examples under `runs/b0_image_only/dev_smoke/`.
+
+## Controlled InstructBLIP B0/B1
+
+The original BLIP decoder-prefix B1 remains reproducible but is now explicitly
+exploratory/legacy. The definitive controlled implementation uses pinned
+InstructBLIP Flan-T5 XL; see
+[`docs/b1_architecture_selection.md`](docs/b1_architecture_selection.md).
+
+Run the controlled development conditions in this order:
+
+```powershell
+python scripts/run_captioning.py --config configs/experiments/b0_instructblip_image_only.yaml
+python scripts/run_captioning.py --config configs/experiments/b1_instructblip_article_context.yaml
+python scripts/run_captioning.py --config configs/experiments/b1_instructblip_random_article.yaml
+```
+
+All three configs share the checkpoint, prompt template, context policy,
+decoding, seed, subset, and evaluator. The runner rejects B1 when any controlled
+field differs from its declared B0. The random condition is only a sanity
+control.
+
+## B1: image plus full article (exploratory/legacy)
+
+B1 uses the same pinned BLIP checkpoint, development subset, seed, decoding,
+and evaluator as B0. The only model-input change is a raw article decoder
+prefix. It retains at most the first 256 article tokens and records original
+tokens, used tokens, and `(original-used)/original` truncation ratio for every
+prediction plus an aggregate `context_statistics.json`.
+
+Install the fixed NER evaluator and run B0 before B1 so paired outputs exist:
+
+```powershell
+python -m pip install -e ".[captioning,coco-eval,ner]"
+python -m pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+python scripts/run_captioning.py --config configs/experiments/b0_image_only.yaml
+python scripts/run_captioning.py --config configs/experiments/b1_full_article.yaml
+python scripts/run_captioning.py --config configs/experiments/b1_random_article.yaml
+python scripts/analyze_context_sanity.py `
+  --b0-dir runs/goodnews_validation_50/b0 `
+  --b1-dir runs/goodnews_validation_50/b1 `
+  --b1-random-dir runs/goodnews_validation_50/b1_random `
+  --output runs/goodnews_validation_50/context_sanity.json
+```
+
+The B1 runner validates all controlled B0/B1 configuration fields and then
+writes 95% paired-bootstrap comparisons for CIDEr and entity precision,
+recall, and F1 under `runs/b1_full_article/dev_smoke/comparisons/`.

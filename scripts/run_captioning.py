@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import sys
 from pathlib import Path
@@ -13,8 +14,8 @@ SRC = PROJECT_ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from kric.captioning.config import B0ExperimentConfig  # noqa: E402
-from kric.captioning.runner import run_b0  # noqa: E402
+from kric.captioning.config import B0ExperimentConfig, load_experiment_config  # noqa: E402
+from kric.captioning.runner import run_b0, run_b1  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,9 +31,26 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    config = B0ExperimentConfig.from_file(args.config)
-    result = run_b0(config, overwrite=args.overwrite)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    config = load_experiment_config(args.config)
+    try:
+        result = (
+            run_b0(config, overwrite=args.overwrite)
+            if isinstance(config, B0ExperimentConfig)
+            else run_b1(config, overwrite=args.overwrite)
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    finally:
+        # The Kaggle workflow runs each condition in a separate process. Free
+        # this process's model tensors and CUDA cache before it exits so the
+        # next controlled condition starts from released device memory.
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
     return 0
 
 

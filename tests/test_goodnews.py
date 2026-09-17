@@ -70,3 +70,39 @@ def test_config_paths_resolve_from_root_dir(tmp_path: Path) -> None:
     assert config.images_root == data_root / "images"
     assert config.article_fields == ("article", "article_text", "text", "body")
     assert config.image_path_fields == ("image_path", "filename", "filepath")
+
+
+def test_nested_config_supports_external_root_and_official_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "goodnews.yaml"
+    config_path.write_text(
+        "dataset:\n  name: goodnews\n  root: D:/Datasets/GoodNews\n",
+        encoding="utf-8",
+    )
+    config = GoodNewsConfig.from_file(config_path)
+    assert config.annotations_path.as_posix().endswith("D:/Datasets/GoodNews/article+caption.json")
+    assert config.splits_path.as_posix().endswith("D:/Datasets/GoodNews/img_splits.json")
+    assert config.images_root.as_posix().endswith("D:/Datasets/GoodNews/images")
+
+
+def test_annotations_outside_official_splits_do_not_break_split_integrity(
+    tmp_path: Path,
+) -> None:
+    annotations = {
+        "official": {"article": "article", "images": {"0": "caption"}},
+        "extra": {"article": "article", "images": {"0": "caption"}},
+    }
+    (tmp_path / "article+caption.json").write_text(json.dumps(annotations), encoding="utf-8")
+    (tmp_path / "img_splits.json").write_text(
+        json.dumps({"official_0.jpg": "val"}), encoding="utf-8"
+    )
+    images = tmp_path / "images"
+    images.mkdir()
+    dataset = GoodNewsDataset(
+        GoodNewsConfig(
+            annotations_path=tmp_path / "article+caption.json",
+            splits_path=tmp_path / "img_splits.json",
+            images_root=images,
+        )
+    )
+    assert dataset.split_integrity_errors() == ()
+    assert [sample.sample_id for sample in dataset.iter_samples("dev")] == ["official_0"]
