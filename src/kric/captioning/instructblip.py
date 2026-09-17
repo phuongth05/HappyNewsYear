@@ -100,6 +100,16 @@ class _InstructBlipCaptioner:
 
     @staticmethod
     def _token_ids(tokenizer: Any, text: str) -> list[int]:
+        # PreTrainedTokenizerFast.encode() warns when an intentionally
+        # untruncated article is longer than model_max_length, even when the
+        # IDs are used only for accounting and are truncated before model
+        # input construction. The backend API performs the same unbounded
+        # tokenization without implying that these IDs will be fed to a model.
+        backend = getattr(tokenizer, "backend_tokenizer", None)
+        if backend is not None:
+            return list(backend.encode(text, add_special_tokens=False).ids)
+        if hasattr(tokenizer, "tokenize") and hasattr(tokenizer, "convert_tokens_to_ids"):
+            return list(tokenizer.convert_tokens_to_ids(tokenizer.tokenize(text)))
         return list(tokenizer.encode(text, add_special_tokens=False))
 
     def _fits(self, text: str) -> bool:
@@ -154,6 +164,30 @@ class _InstructBlipCaptioner:
             "generation_tokens": self.generation.max_new_tokens,
         }
 
+    def _assert_encoded_input_lengths(self, encoded: dict[str, Any]) -> None:
+        """Validate the processor's actual model-bound tensors before generation."""
+
+        language_length = int(encoded["input_ids"].shape[-1])
+        language_limit = self.language_max_positions or int(
+            self.processor.tokenizer.model_max_length
+        )
+        if language_length > language_limit:
+            raise RuntimeError(
+                "final InstructBLIP language input exceeds its supported "
+                f"sequence length: {language_length} > {language_limit}"
+            )
+        qformer_ids = encoded.get("qformer_input_ids")
+        if qformer_ids is not None:
+            qformer_length = int(qformer_ids.shape[-1])
+            qformer_limit = self.qformer_max_positions or int(
+                self.processor.qformer_tokenizer.model_max_length
+            )
+            if qformer_length > qformer_limit:
+                raise RuntimeError(
+                    "final InstructBLIP Q-Former text input exceeds its supported "
+                    f"sequence length: {qformer_length} > {qformer_limit}"
+                )
+
     def _generate_prompts(
         self,
         inputs: Sequence[ImageOnlyInput] | Sequence[FullArticleInput],
@@ -182,6 +216,7 @@ class _InstructBlipCaptioner:
                     truncation=False,
                     return_tensors="pt",
                 )
+                self._assert_encoded_input_lengths(encoded)
                 encoded = {
                     key: (
                         value.to(self.device, dtype=self.torch_dtype)
@@ -259,6 +294,12 @@ class InstructBlipArticleCaptioner(_InstructBlipCaptioner):
         if self.model is None or self.processor is None:
             self.load()
         built = [self._build_article_prompt(item.article_text) for item in inputs]
+        for item, (_, stats) in zip(inputs, built, strict=True):
+            if int(stats["used_article_tokens"]) > self.context.max_context_tokens:
+                raise RuntimeError(
+                    f"context budget exceeded for {item.sample_id}: "
+                    f"{stats['used_article_tokens']} > {self.context.max_context_tokens}"
+                )
         prompts = [prompt for prompt, _ in built]
         stats = [item_stats for _, item_stats in built]
         return self._generate_prompts(inputs, prompts, stats)

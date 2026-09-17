@@ -304,6 +304,22 @@ def main() -> int:
     controls = validate_scientific_controls(runtime_paths)
     write_json(output_root / "scientific_controls.json", controls)
 
+    evaluation_preflight_command = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "check_evaluation_dependencies.py"),
+        "--metrics",
+        "cider,entity",
+        "--entity-extractor",
+        "spacy",
+        "--spacy-model",
+        "en_core_web_sm",
+        "--output",
+        str(output_root / "evaluation_preflight.json"),
+    ]
+    workflow["commands"].append(
+        run_command(evaluation_preflight_command, "Evaluation dependency preflight")
+    )
+
     preflight_command = [
         sys.executable,
         str(PROJECT_ROOT / "scripts" / "gpu_preflight.py"),

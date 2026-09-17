@@ -169,7 +169,16 @@ def _runtime_configs(
         )
         runtime_path = config_dir / f"{name}.runtime.yaml"
         runtime_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
-        load_experiment_config(runtime_path)
+        parsed = load_experiment_config(runtime_path)
+        if (
+            tuple(parsed.evaluation.metrics) != ("cider", "entity")
+            or parsed.evaluation.entity_extractor != "spacy"
+            or parsed.evaluation.spacy_model != "en_core_web_sm"
+            or parsed.evaluation.allow_metric_errors
+        ):
+            raise RuntimeError(
+                f"{name} must require CIDEr and spaCy entity metrics only"
+            )
         runtime_paths[name] = runtime_path
     return runtime_paths
 
@@ -198,6 +207,21 @@ def main() -> int:
         "output_root": str(output_root),
         "commands": [],
     }
+    evaluation_preflight = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "check_evaluation_dependencies.py"),
+        "--metrics",
+        "cider,entity",
+        "--entity-extractor",
+        "spacy",
+        "--spacy-model",
+        "en_core_web_sm",
+        "--output",
+        str(output_root / "evaluation_preflight.json"),
+    ]
+    workflow["commands"].append(
+        _run(evaluation_preflight, "Evaluation dependency preflight")
+    )
     preflight = [
         sys.executable,
         str(PROJECT_ROOT / "scripts" / "gpu_preflight.py"),

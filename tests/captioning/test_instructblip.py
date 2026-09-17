@@ -1,5 +1,6 @@
 from dataclasses import fields, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,23 @@ class WordTokenizer:
 class FakeProcessor:
     tokenizer = WordTokenizer()
     qformer_tokenizer = WordTokenizer()
+
+
+class ShapeOnlyTensor:
+    def __init__(self, length):
+        self.shape = (1, length)
+
+
+class WarningBackend:
+    def encode(self, text, add_special_tokens=False):
+        return SimpleNamespace(ids=text.split())
+
+
+class BackendTokenizer(WordTokenizer):
+    backend_tokenizer = WarningBackend()
+
+    def encode(self, text, add_special_tokens=False):
+        raise AssertionError("high-level encode must not be used for unbounded counting")
 
 
 def _captioner(cls, *, max_context_tokens=3):
@@ -94,6 +112,31 @@ def test_context_token_accounting_is_exact() -> None:
         "max_context_tokens": 3,
         "generation_tokens": 30,
     }
+
+
+def test_unbounded_article_count_uses_warning_free_backend() -> None:
+    assert InstructBlipArticleCaptioner._token_ids(
+        BackendTokenizer(), "one two three four"
+    ) == ["one", "two", "three", "four"]
+
+
+def test_actual_processor_output_must_fit_both_model_limits() -> None:
+    captioner = _captioner(InstructBlipArticleCaptioner)
+    captioner._assert_encoded_input_lengths(
+        {
+            "input_ids": ShapeOnlyTensor(512),
+            "qformer_input_ids": ShapeOnlyTensor(512),
+        }
+    )
+    with pytest.raises(RuntimeError, match="language input"):
+        captioner._assert_encoded_input_lengths({"input_ids": ShapeOnlyTensor(513)})
+    with pytest.raises(RuntimeError, match="Q-Former"):
+        captioner._assert_encoded_input_lengths(
+            {
+                "input_ids": ShapeOnlyTensor(512),
+                "qformer_input_ids": ShapeOnlyTensor(513),
+            }
+        )
 
 
 def test_correct_and_random_article_assignment_for_new_experiments() -> None:

@@ -97,7 +97,12 @@ def _token_counter(name: str, revision: str):
         ) from error
     processor = InstructBlipProcessor.from_pretrained(name, revision=revision)
     tokenizer = processor.tokenizer
-    return lambda text: len(tokenizer.encode(text, add_special_tokens=False))
+    backend = getattr(tokenizer, "backend_tokenizer", None)
+    if backend is not None:
+        return lambda text: len(backend.encode(text, add_special_tokens=False).ids)
+    return lambda text: len(
+        tokenizer.convert_tokens_to_ids(tokenizer.tokenize(text))
+    )
 
 
 def print_summary(report: dict) -> None:

@@ -230,6 +230,35 @@ def _run_evaluation(
     return result
 
 
+def _run_evaluation_preflight(
+    config: B0ExperimentConfig | B1ExperimentConfig | B2ExperimentConfig,
+) -> dict[str, Any] | None:
+    """Check the exact workflow interpreter before any caption model is loaded."""
+
+    if not config.evaluation.enabled:
+        return None
+    output = config.output_dir / "evaluation_preflight.json"
+    command = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "check_evaluation_dependencies.py"),
+        "--metrics",
+        ",".join(config.evaluation.metrics),
+        "--entity-extractor",
+        config.evaluation.entity_extractor,
+        "--spacy-model",
+        config.evaluation.spacy_model,
+        "--output",
+        str(output),
+    ]
+    completed = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True)
+    if completed.returncode:
+        raise RuntimeError(
+            "evaluation dependency preflight failed before model load: "
+            + (completed.stderr.strip() or completed.stdout.strip())
+        )
+    return json.loads(output.read_text(encoding="utf-8"))
+
+
 def _assert_b0_b1_comparable(config: B1ExperimentConfig) -> B0ExperimentConfig:
     baseline = B0ExperimentConfig.from_file(config.comparison.baseline_config)
     mismatches = []
@@ -370,6 +399,8 @@ def run_b0(
     predictions_path = config.output_dir / "predictions.jsonl"
     if predictions_path.exists() and not overwrite:
         raise FileExistsError(f"refusing to overwrite existing run: {predictions_path}")
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    _run_evaluation_preflight(config)
 
     random.seed(config.seed)
     dataset = GoodNewsDataset.from_config(config.dataset.config_path)
@@ -394,7 +425,6 @@ def run_b0(
     )
     generator = captioner or _make_b0_captioner(config)
 
-    config.output_dir.mkdir(parents=True, exist_ok=True)
     resolved = _resolved_config(config)
     write_json(config.output_dir / "config.resolved.json", resolved)
     write_json(config.output_dir / "resolved_config.json", resolved)
@@ -524,6 +554,8 @@ def run_b1(
     predictions_path = config.output_dir / "predictions.jsonl"
     if predictions_path.exists() and not overwrite:
         raise FileExistsError(f"refusing to overwrite existing run: {predictions_path}")
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    _run_evaluation_preflight(config)
 
     random.seed(config.seed)
     dataset = GoodNewsDataset.from_config(config.dataset.config_path)
@@ -557,7 +589,6 @@ def run_b1(
     )
     generator = captioner or _make_b1_captioner(config)
 
-    config.output_dir.mkdir(parents=True, exist_ok=True)
     resolved = _resolved_config(config)
     write_json(config.output_dir / "config.resolved.json", resolved)
     write_json(config.output_dir / "resolved_config.json", resolved)
@@ -806,6 +837,11 @@ def _select_b2_context(
     tokenizer = generator.processor.tokenizer
     article_token_count = len(generator._token_ids(tokenizer, sample.article_text))
     used_tokens = int(context_stats["used_article_tokens"])
+    if used_tokens > generator.context.max_context_tokens:
+        raise RuntimeError(
+            f"B2 selected context exceeds budget for {sample.sample_id}: "
+            f"{used_tokens} > {generator.context.max_context_tokens}"
+        )
     selection = {
         "candidate_sentence_count": len(sample.article_sentences),
         "selected_sentence_count": len(selected_in_article_order),
@@ -849,6 +885,8 @@ def run_b2(
     predictions_path = config.output_dir / "predictions.jsonl"
     if predictions_path.exists() and not overwrite:
         raise FileExistsError(f"refusing to overwrite existing run: {predictions_path}")
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    _run_evaluation_preflight(config)
     random.seed(config.seed)
     dataset = GoodNewsDataset.from_config(config.dataset.config_path)
     dataset.assert_split_integrity()
@@ -863,7 +901,6 @@ def run_b2(
     rankings = _load_b2_rankings(config.retrieval.rankings_path, samples, config)
     generator = captioner or _make_b1_captioner(config)
 
-    config.output_dir.mkdir(parents=True, exist_ok=True)
     resolved = _resolved_config(config)
     write_json(config.output_dir / "config.resolved.json", resolved)
     write_json(config.output_dir / "resolved_config.json", resolved)

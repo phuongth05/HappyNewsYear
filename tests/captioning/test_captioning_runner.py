@@ -2,6 +2,8 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 import kric.captioning.runner as runner_module
 from kric.captioning.config import EvaluationConfig
 from kric.captioning.config import B0ExperimentConfig
@@ -121,5 +123,24 @@ def test_runner_evaluates_the_saved_prediction_artifact(tmp_path: Path, monkeypa
         return {"seconds": 0.01}
 
     monkeypatch.setattr(runner_module, "_run_evaluation", fake_evaluation)
+    monkeypatch.setattr(
+        runner_module, "_run_evaluation_preflight", lambda _config: {"status": "passed"}
+    )
     result = run_b0(config, captioner=SpyCaptioner())
     assert observed["predictions"] == Path(result["predictions"])
+
+
+def test_dependency_failure_happens_before_captioner_load(tmp_path: Path, monkeypatch) -> None:
+    config = B0ExperimentConfig.from_file(_write_fixture(tmp_path))
+    config = replace(config, evaluation=EvaluationConfig(enabled=True, metrics=("cider",)))
+    captioner = SpyCaptioner()
+    loaded = []
+    captioner.load = lambda: loaded.append(True)
+
+    def fail(_config):
+        raise RuntimeError("evaluation dependency preflight failed")
+
+    monkeypatch.setattr(runner_module, "_run_evaluation_preflight", fail)
+    with pytest.raises(RuntimeError, match="dependency preflight"):
+        run_b0(config, captioner=captioner)
+    assert loaded == []

@@ -100,6 +100,11 @@ def test_all_six_b2_configs_are_controlled_against_b1() -> None:
         assert baseline.generation == config.generation
         assert baseline.prompt == config.prompt
         assert baseline.context == config.context
+        assert config.evaluation.metrics == ("cider", "entity")
+        assert config.evaluation.entity_extractor == "spacy"
+        assert config.evaluation.spacy_model == "en_core_web_sm"
+        assert config.evaluation.allow_metric_errors is False
+        assert "spice" not in config.evaluation.metrics
         observed.add((config.retrieval.method, config.retrieval.k))
     assert observed == {
         (method, k) for method in ("bm25", "semantic") for k in (1, 3, 5)

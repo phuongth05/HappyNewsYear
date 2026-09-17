@@ -74,9 +74,37 @@ python scripts/run_b2_validation.py \
 ```
 
 The runner refuses a non-empty output directory or an existing bundle. It
-first verifies the exact 50 IDs and the saved B1 controls, then performs GPU
-preflight, both rankings, all six runs, 10,000-resample paired bootstrap
-comparisons, and packaging.
+first verifies the exact 50 IDs and the saved B1 controls. Before loading CLIP
+or InstructBLIP, it uses the same Python interpreter to import spaCy, load
+`en_core_web_sm`, import CIDEr, and exercise the packaged PTB tokenizer/Java
+path. The result is saved as `evaluation_preflight.json`; any failure stops the
+workflow before model download or generation. It then performs GPU preflight,
+both rankings, all six runs, 10,000-resample paired bootstrap comparisons, and
+packaging.
+
+For this 50-sample workflow, the required metrics are CIDEr and spaCy entity
+precision/recall/F1. SPICE is not evaluated and is not a fatal dependency. Its
+module, Java, SPICE JAR, and CoreNLP resource availability are logged separately
+under `checks.spice` as `available`, `unavailable`, or `error`, without
+downloading missing resources. SPICE can be enabled explicitly in a later final
+evaluation configuration.
+
+The dependency check can also be run independently:
+
+```bash
+python scripts/check_evaluation_dependencies.py \
+  --metrics cider,entity \
+  --entity-extractor spacy \
+  --spacy-model en_core_web_sm \
+  --output artifacts/evaluator_readiness/current_interpreter.json
+```
+
+For every B2 sample, the selected article portion is asserted to be at most
+384 tokens. Immediately before `model.generate()`, the actual language and
+Q-Former tensors returned by `InstructBlipProcessor` are checked against the
+checkpoint sequence limits. Untruncated article length is measured through
+the tokenizer backend solely for accounting, so a long source article no
+longer triggers a misleading model-input length warning.
 
 To debug retrieval without loading InstructBLIP, run either ranker directly:
 
@@ -113,4 +141,3 @@ per category when the data actually contains them. Do not infer those labels
 from CIDEr alone. Choose a B2 configuration using development metrics,
 context efficiency, and the qualitative coding together; never use the test
 split for this choice.
-

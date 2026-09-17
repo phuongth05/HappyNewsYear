@@ -166,6 +166,18 @@ selection rules, per-sample evidence logs, cloud command, paired-bootstrap
 analysis, and manual qualitative-review protocol. This stage does not include
 atomic evidence or claim-level alignment.
 
+Before any caption model is downloaded or loaded, the runner validates spaCy,
+the configured `en_core_web_sm` model, and the CIDEr/PTB/Java path in the exact
+workflow interpreter. Run the same preflight directly with:
+
+```powershell
+python scripts/check_evaluation_dependencies.py `
+  --metrics cider,entity `
+  --entity-extractor spacy `
+  --spacy-model en_core_web_sm `
+  --output artifacts/evaluator_readiness/current_interpreter.json
+```
+
 ## B1: image plus full article (exploratory/legacy)
 
 B1 uses the same pinned BLIP checkpoint, development subset, seed, decoding,
