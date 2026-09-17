@@ -58,16 +58,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-root",
+        required=True,
         type=Path,
-        default=PROJECT_ROOT / "runs" / "goodnews_validation_50",
     )
     parser.add_argument(
         "--bundle",
+        required=True,
         type=Path,
-        default=PROJECT_ROOT.parent / "goodnews_validation_50.zip",
     )
-    parser.add_argument("--validated-ids", type=Path, default=DEFAULT_IDS)
-    parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
 
@@ -252,8 +250,8 @@ def run_command(command: list[str], label: str) -> dict[str, Any]:
     return result
 
 
-def create_output_bundle(output_root: Path, bundle: Path, *, overwrite: bool) -> dict[str, Any]:
-    if bundle.exists() and not overwrite:
+def create_output_bundle(output_root: Path, bundle: Path) -> dict[str, Any]:
+    if bundle.exists():
         raise FileExistsError(f"refusing to overwrite existing bundle: {bundle}")
     bundle.parent.mkdir(parents=True, exist_ok=True)
     temporary = bundle.with_suffix(bundle.suffix + ".tmp")
@@ -279,16 +277,16 @@ def main() -> int:
     dataset_root = args.dataset_root.expanduser().resolve()
     output_root = args.output_root.expanduser().resolve()
     bundle = args.bundle.expanduser().resolve()
-    expected_ids = load_validated_ids(args.validated_ids.resolve())
+    expected_ids = load_validated_ids(DEFAULT_IDS)
     if not dataset_root.is_dir():
         raise FileNotFoundError(f"GoodNews dataset root does not exist: {dataset_root}")
-    if bundle.exists() and not args.overwrite:
+    if bundle.exists():
         raise FileExistsError(f"refusing to overwrite existing bundle: {bundle}")
     if output_root == dataset_root or output_root in dataset_root.parents:
         raise ValueError("output root must not contain or equal the input dataset root")
     for condition in CONDITION_SOURCES:
         predictions = output_root / condition / "predictions.jsonl"
-        if predictions.exists() and not args.overwrite:
+        if predictions.exists():
             raise FileExistsError(f"refusing to overwrite existing run: {predictions}")
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -296,8 +294,8 @@ def main() -> int:
         "status": "preflight",
         "dataset_root": str(dataset_root),
         "output_root": str(output_root),
-        "validated_ids_manifest": str(args.validated_ids.resolve()),
-        "validated_ids_sha256": file_sha256(args.validated_ids.resolve()),
+        "validated_ids_manifest": str(DEFAULT_IDS),
+        "validated_ids_sha256": file_sha256(DEFAULT_IDS),
         "commands": [],
     }
     subset_report = validate_exact_subset(dataset_root, expected_ids)
@@ -321,8 +319,6 @@ def main() -> int:
             "--config",
             str(runtime_paths[condition]),
         ]
-        if args.overwrite:
-            command.append("--overwrite")
         workflow["commands"].append(run_command(command, condition))
         assert_prediction_ids(output_root / condition / "predictions.jsonl", expected_ids)
         # Model-process cleanup runs in run_captioning.py; this collects only
@@ -365,7 +361,7 @@ def main() -> int:
         }
     )
     write_json(output_root / "workflow_runtime.json", workflow)
-    bundle_result = create_output_bundle(output_root, bundle, overwrite=args.overwrite)
+    bundle_result = create_output_bundle(output_root, bundle)
     print(json.dumps({"workflow": workflow, "bundle": bundle_result}, indent=2))
     return 0
 

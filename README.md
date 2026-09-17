@@ -54,12 +54,13 @@ python scripts/audit_experiment_subset.py --dataset-root "D:/KIEMCOM/HK1-N4/KLTN
 python -m pytest
 ```
 
-## Kaggle: controlled GoodNews validation
+## Cloud GPU: controlled GoodNews validation
 
-The CUDA workflow for the fixed 50-sample B0/B1/B1-random validation is
-documented in `docs/kaggle_goodnews_validation.md`. It accepts the attached
-dataset location through `--dataset-root`; no Kaggle dataset slug is embedded
-in code or configuration.
+The same CUDA workflow runs the fixed 50-sample B0/B1/B1-random validation on
+Kaggle, molab/marimo, or another CUDA host. It accepts `--dataset-root`,
+`--output-root`, and `--bundle`; no provider path is embedded in core code.
+See `docs/kaggle_goodnews_validation.md` and
+`docs/molab_goodnews_validation.md`.
 
 Model and evidence code must consume `InferenceSample`, obtained through
 `DatasetAdapter.iter_inference_samples`. It contains neither the reference

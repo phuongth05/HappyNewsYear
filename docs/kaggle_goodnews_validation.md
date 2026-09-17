@@ -41,8 +41,8 @@ Replace only the input folder placeholder:
   --bundle "/kaggle/working/goodnews_validation_50.zip"
 ```
 
-Add `--overwrite` only when intentionally replacing a previous run. The
-workflow refuses existing predictions and an existing ZIP by default.
+The workflow refuses existing predictions and an existing ZIP. Use a new
+output location or explicitly remove an obsolete run before starting again.
 
 Before model loading, it repeats full validation of the exact 50 selected
 images/articles/captions, compares the selected ordered IDs with

@@ -40,7 +40,7 @@ def main() -> int:
         )
         print(json.dumps(result, indent=2, ensure_ascii=False))
     finally:
-        # The Kaggle workflow runs each condition in a separate process. Free
+        # The cloud workflow runs each condition in a separate process. Free
         # this process's model tensors and CUDA cache before it exits so the
         # next controlled condition starts from released device memory.
         gc.collect()
