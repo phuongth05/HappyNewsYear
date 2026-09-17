@@ -14,8 +14,12 @@ SRC = PROJECT_ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from kric.captioning.config import B0ExperimentConfig, load_experiment_config  # noqa: E402
-from kric.captioning.runner import run_b0, run_b1  # noqa: E402
+from kric.captioning.config import (  # noqa: E402
+    B0ExperimentConfig,
+    B2ExperimentConfig,
+    load_experiment_config,
+)
+from kric.captioning.runner import run_b0, run_b1, run_b2  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,11 +37,12 @@ def main() -> int:
     args = parse_args()
     config = load_experiment_config(args.config)
     try:
-        result = (
-            run_b0(config, overwrite=args.overwrite)
-            if isinstance(config, B0ExperimentConfig)
-            else run_b1(config, overwrite=args.overwrite)
-        )
+        if isinstance(config, B0ExperimentConfig):
+            result = run_b0(config, overwrite=args.overwrite)
+        elif isinstance(config, B2ExperimentConfig):
+            result = run_b2(config, overwrite=args.overwrite)
+        else:
+            result = run_b1(config, overwrite=args.overwrite)
         print(json.dumps(result, indent=2, ensure_ascii=False))
     finally:
         # The cloud workflow runs each condition in a separate process. Free

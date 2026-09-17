@@ -111,6 +111,15 @@ class ComparisonConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SentenceRetrievalConfig:
+    method: str
+    k: int
+    rankings_path: Path
+    model_name: str | None = None
+    model_revision: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class B0ExperimentConfig:
     experiment: str
     seed: int
@@ -346,9 +355,142 @@ class B1ExperimentConfig:
             raise ValueError("InstructBLIP experiments require prompt.instruction")
 
 
+@dataclass(frozen=True, slots=True)
+class B2ExperimentConfig:
+    experiment: str
+    seed: int
+    dataset: DatasetConfig
+    model: ModelConfig
+    generation: GenerationConfig
+    context: FullArticleContextConfig
+    retrieval: SentenceRetrievalConfig
+    output_dir: Path
+    evaluation: EvaluationConfig
+    comparison: ComparisonConfig
+    prompt: PromptConfig = field(default_factory=PromptConfig)
+    source_path: Path | None = None
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> "B2ExperimentConfig":
+        source = Path(path).resolve()
+        raw = yaml.safe_load(source.read_text(encoding="utf-8"))
+        if not isinstance(raw, Mapping):
+            raise TypeError("experiment config must contain a mapping")
+        if raw.get("experiment") != "B2_instructblip_sentence_context":
+            raise ValueError("B2 runner requires experiment: B2_instructblip_sentence_context")
+        dataset = raw.get("dataset")
+        model = raw.get("model")
+        retrieval = raw.get("retrieval")
+        comparison = raw.get("comparison")
+        generation = raw.get("generation", {})
+        context = raw.get("context", {})
+        prompt = raw.get("prompt", {})
+        evaluation = raw.get("evaluation", {})
+        for name, value in (
+            ("dataset", dataset),
+            ("model", model),
+            ("retrieval", retrieval),
+            ("comparison", comparison),
+            ("generation", generation),
+            ("context", context),
+            ("prompt", prompt),
+            ("evaluation", evaluation),
+        ):
+            if not isinstance(value, Mapping):
+                raise TypeError(f"{name} must be a mapping")
+        evaluation_metrics = evaluation.get("metrics", ["cider", "entity"])
+        comparison_metrics = comparison.get(
+            "metrics", ["CIDEr", "EntityPrecision", "EntityRecall", "EntityF1"]
+        )
+        config = cls(
+            experiment=str(raw["experiment"]),
+            seed=int(raw.get("seed", 2026)),
+            dataset=DatasetConfig(
+                name=str(dataset.get("name", "")).lower(),
+                config_path=_resolve(dataset["config"], source.parent),
+                split=str(dataset.get("split", "dev")).lower(),
+                max_samples=(
+                    None if dataset.get("max_samples") is None else int(dataset["max_samples"])
+                ),
+                subset_strategy=str(dataset.get("subset_strategy", "first_by_sample_id")),
+            ),
+            model=ModelConfig(
+                type=str(model.get("type", "")).lower(),
+                name=str(model.get("name", "")),
+                revision=str(model.get("revision", "")),
+                device=str(model.get("device", "auto")),
+                dtype=str(model.get("dtype", "float32")),
+                batch_size=int(model.get("batch_size", 1)),
+            ),
+            generation=GenerationConfig(**dict(generation)),
+            context=_context_config(context),
+            retrieval=SentenceRetrievalConfig(
+                method=str(retrieval.get("method", "")).lower(),
+                k=int(retrieval.get("k", 0)),
+                rankings_path=_resolve(retrieval["rankings_path"], source.parent),
+                model_name=(
+                    None if retrieval.get("model_name") is None else str(retrieval["model_name"])
+                ),
+                model_revision=(
+                    None
+                    if retrieval.get("model_revision") is None
+                    else str(retrieval["model_revision"])
+                ),
+            ),
+            output_dir=_resolve(raw["output_dir"], source.parent),
+            evaluation=EvaluationConfig(
+                enabled=bool(evaluation.get("enabled", True)),
+                metrics=tuple(str(item) for item in evaluation_metrics),
+                allow_metric_errors=bool(evaluation.get("allow_metric_errors", False)),
+                entity_extractor=str(evaluation.get("entity_extractor", "metadata")),
+                spacy_model=str(evaluation.get("spacy_model", "en_core_web_sm")),
+            ),
+            comparison=ComparisonConfig(
+                baseline_config=_resolve(comparison["baseline_config"], source.parent),
+                baseline_per_sample=_resolve(comparison["baseline_per_sample"], source.parent),
+                metrics=tuple(str(item) for item in comparison_metrics),
+                confidence=float(comparison.get("confidence", 0.95)),
+                resamples=int(comparison.get("resamples", 10_000)),
+                seed=int(comparison.get("seed", 2026)),
+            ),
+            prompt=_prompt_config(prompt),
+            source_path=source,
+        )
+        config.validate()
+        return config
+
+    def validate(self) -> None:
+        if self.dataset.name != "goodnews" or self.dataset.split != "dev":
+            raise ValueError("B2 validation requires GoodNews dev")
+        if self.dataset.max_samples != 50:
+            raise ValueError("B2 validation requires exactly max_samples: 50")
+        if self.dataset.subset_strategy != "first_by_sample_id":
+            raise ValueError("B2 requires first_by_sample_id selection")
+        if self.model.type != "instructblip" or not self.model.name or not self.model.revision:
+            raise ValueError("B2 requires a pinned InstructBLIP model")
+        if self.model.batch_size != 1 or self.model.dtype != "float16":
+            raise ValueError("B2 requires float16 and batch_size: 1")
+        if self.generation.do_sample:
+            raise ValueError("B2 requires deterministic decoding")
+        if self.context.max_context_tokens != 384 or self.context.truncation != "head":
+            raise ValueError("B2 requires the fixed 384-token head budget policy")
+        if self.retrieval.method not in {"bm25", "semantic"}:
+            raise ValueError("B2 retrieval.method must be bm25 or semantic")
+        if self.retrieval.k not in {1, 3, 5}:
+            raise ValueError("B2 retrieval.k must be 1, 3, or 5")
+        if self.retrieval.method == "semantic" and (
+            not self.retrieval.model_name or not self.retrieval.model_revision
+        ):
+            raise ValueError("semantic B2 requires pinned retrieval model_name/revision")
+        if not self.prompt.instruction.strip():
+            raise ValueError("B2 requires the shared caption instruction")
+        if not self.evaluation.metrics or not self.comparison.metrics:
+            raise ValueError("B2 evaluation/comparison metrics must not be empty")
+
+
 def load_experiment_config(
     path: str | Path,
-) -> B0ExperimentConfig | B1ExperimentConfig:
+) -> B0ExperimentConfig | B1ExperimentConfig | B2ExperimentConfig:
     source = Path(path).resolve()
     raw = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(raw, Mapping):
@@ -363,4 +505,6 @@ def load_experiment_config(
         "B1_instructblip_random_article",
     }:
         return B1ExperimentConfig.from_file(source)
+    if experiment == "B2_instructblip_sentence_context":
+        return B2ExperimentConfig.from_file(source)
     raise ValueError(f"unsupported experiment: {experiment!r}")

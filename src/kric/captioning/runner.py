@@ -20,7 +20,7 @@ from kric.evaluation.io import file_sha256, write_json
 
 from .blip import BlipImageOnlyCaptioner
 from .blip_full_article import BlipFullArticleCaptioner
-from .config import B0ExperimentConfig, B1ExperimentConfig
+from .config import B0ExperimentConfig, B1ExperimentConfig, B2ExperimentConfig
 from .instructblip import InstructBlipArticleCaptioner, InstructBlipImageOnlyCaptioner
 from .types import FullArticleInput, GeneratedCaption, ImageOnlyInput
 
@@ -126,7 +126,9 @@ def _finish_gpu_memory_tracking(start: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _resolved_config(config: B0ExperimentConfig | B1ExperimentConfig) -> dict[str, Any]:
+def _resolved_config(
+    config: B0ExperimentConfig | B1ExperimentConfig | B2ExperimentConfig,
+) -> dict[str, Any]:
     resolved = {
         "experiment": config.experiment,
         "seed": config.seed,
@@ -164,7 +166,7 @@ def _resolved_config(config: B0ExperimentConfig | B1ExperimentConfig) -> dict[st
             "spacy_model": config.evaluation.spacy_model,
         },
     }
-    if isinstance(config, B1ExperimentConfig):
+    if isinstance(config, (B1ExperimentConfig, B2ExperimentConfig)):
         resolved["comparison"] = {
             "baseline_config": str(config.comparison.baseline_config),
             "baseline_per_sample": str(config.comparison.baseline_per_sample),
@@ -173,11 +175,20 @@ def _resolved_config(config: B0ExperimentConfig | B1ExperimentConfig) -> dict[st
             "resamples": config.comparison.resamples,
             "seed": config.comparison.seed,
         }
+    if isinstance(config, B2ExperimentConfig):
+        resolved["retrieval"] = {
+            "method": config.retrieval.method,
+            "k": config.retrieval.k,
+            "rankings_path": str(config.retrieval.rankings_path),
+            "model_name": config.retrieval.model_name,
+            "model_revision": config.retrieval.model_revision,
+        }
     return resolved
 
 
 def _run_evaluation(
-    config: B0ExperimentConfig | B1ExperimentConfig, predictions: Path
+    config: B0ExperimentConfig | B1ExperimentConfig | B2ExperimentConfig,
+    predictions: Path,
 ) -> dict[str, Any]:
     metrics_path = config.output_dir / "metrics.json"
     per_sample_path = config.output_dir / "metrics_per_sample.csv"
@@ -241,7 +252,31 @@ def _assert_b0_b1_comparable(config: B1ExperimentConfig) -> B0ExperimentConfig:
     return baseline
 
 
-def _run_paired_comparisons(config: B1ExperimentConfig) -> dict[str, Any]:
+def _assert_b1_b2_comparable(config: B2ExperimentConfig) -> B1ExperimentConfig:
+    baseline = B1ExperimentConfig.from_file(config.comparison.baseline_config)
+    mismatches = []
+    for field_name in (
+        "seed",
+        "dataset",
+        "model",
+        "generation",
+        "evaluation",
+        "prompt",
+        "context",
+    ):
+        if getattr(baseline, field_name) != getattr(config, field_name):
+            mismatches.append(field_name)
+    if mismatches:
+        raise ValueError(
+            "B1/B2 causal comparison is not controlled; mismatched fields: "
+            + ", ".join(mismatches)
+        )
+    return baseline
+
+
+def _run_paired_comparisons(
+    config: B1ExperimentConfig | B2ExperimentConfig,
+) -> dict[str, Any]:
     baseline = config.comparison.baseline_per_sample
     candidate = config.output_dir / "metrics_per_sample.csv"
     output_dir = config.output_dir / "comparisons"
@@ -689,4 +724,299 @@ def run_b1(
         "context_statistics": context_summary,
         "samples": len(rows),
         "qualitative_examples": qualitative,
+    }
+
+
+def _load_b2_rankings(
+    path: Path, samples: Sequence[Any], config: B2ExperimentConfig
+) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            sample_id = str(row.get("sample_id", ""))
+            if not sample_id or sample_id in rows:
+                raise ValueError(f"invalid/duplicate ranking ID at line {line_number}")
+            rows[sample_id] = row
+    expected_ids = {sample.sample_id for sample in samples}
+    if set(rows) != expected_ids:
+        raise ValueError("ranking artifact IDs differ from the selected B2 samples")
+    for sample in samples:
+        row = rows[sample.sample_id]
+        if row.get("candidate_sentence_count") != len(sample.article_sentences):
+            raise ValueError(f"candidate count mismatch for {sample.sample_id}")
+        retriever = row.get("retriever", {})
+        if retriever.get("method") != config.retrieval.method:
+            raise ValueError(f"retrieval method mismatch for {sample.sample_id}")
+        if config.retrieval.method == "semantic" and (
+            retriever.get("name") != config.retrieval.model_name
+            or retriever.get("revision") != config.retrieval.model_revision
+        ):
+            raise ValueError(f"semantic model mismatch for {sample.sample_id}")
+        ranked = row.get("ranked_sentences")
+        if not isinstance(ranked, list) or len(ranked) != len(sample.article_sentences):
+            raise ValueError(f"incomplete sentence ranking for {sample.sample_id}")
+        sentence_ids = [int(item["sentence_id"]) for item in ranked]
+        ranks = [int(item["rank"]) for item in ranked]
+        if set(sentence_ids) != set(range(len(sample.article_sentences))):
+            raise ValueError(f"sentence IDs mismatch for {sample.sample_id}")
+        if ranks != list(range(1, len(ranked) + 1)):
+            raise ValueError(f"ranking order is invalid for {sample.sample_id}")
+        for item in ranked:
+            sentence_id = int(item["sentence_id"])
+            if item["text"] != sample.article_sentences[sentence_id]:
+                raise ValueError(f"sentence text mismatch for {sample.sample_id}:{sentence_id}")
+    return rows
+
+
+def _select_b2_context(
+    generator: InstructBlipArticleCaptioner,
+    sample: Any,
+    ranking: dict[str, Any],
+    k: int,
+) -> tuple[str, dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    skipped_for_budget: list[int] = []
+
+    def context_text(items: Sequence[dict[str, Any]]) -> str:
+        return "\n".join(
+            item["text"] for item in sorted(items, key=lambda value: int(value["sentence_id"]))
+        )
+
+    for candidate in ranking["ranked_sentences"]:
+        if len(selected) == k:
+            break
+        trial = [*selected, candidate]
+        _, trial_stats = generator._build_article_prompt(context_text(trial))
+        if trial_stats["used_article_tokens"] == trial_stats["original_article_tokens"]:
+            selected.append(candidate)
+        else:
+            skipped_for_budget.append(int(candidate["sentence_id"]))
+    fallback_truncated = False
+    if not selected:
+        selected = [ranking["ranked_sentences"][0]]
+        fallback_truncated = True
+    selected_in_article_order = sorted(
+        selected, key=lambda item: int(item["sentence_id"])
+    )
+    context = context_text(selected_in_article_order)
+    _, context_stats = generator._build_article_prompt(context)
+    tokenizer = generator.processor.tokenizer
+    article_token_count = len(generator._token_ids(tokenizer, sample.article_text))
+    used_tokens = int(context_stats["used_article_tokens"])
+    selection = {
+        "candidate_sentence_count": len(sample.article_sentences),
+        "selected_sentence_count": len(selected_in_article_order),
+        "selected_sentence_ids": [
+            int(item["sentence_id"]) for item in selected_in_article_order
+        ],
+        "selected_ranking_scores": [
+            float(item["score"]) for item in selected_in_article_order
+        ],
+        "selected_ranks": [int(item["rank"]) for item in selected_in_article_order],
+        "selected_sentence_texts": [item["text"] for item in selected_in_article_order],
+        "skipped_sentence_ids_for_budget": skipped_for_budget,
+        "fallback_sentence_truncated": fallback_truncated,
+        "article_token_count": article_token_count,
+        "selected_context_tokens_before_model_limit": int(
+            context_stats["original_article_tokens"]
+        ),
+        "context_token_count": used_tokens,
+        "fraction_of_article_represented": (
+            used_tokens / article_token_count if article_token_count else 0.0
+        ),
+        "fraction_of_sentences_represented": (
+            len(selected_in_article_order) / len(sample.article_sentences)
+        ),
+        "context_truncation_ratio": float(context_stats["truncation_ratio"]),
+        "max_context_tokens": int(context_stats["max_context_tokens"]),
+        "generation_tokens": int(context_stats["generation_tokens"]),
+    }
+    return context, selection
+
+
+def run_b2(
+    config: B2ExperimentConfig,
+    *,
+    captioner: Captioner | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Generate captions from reference-free top-k sentence context."""
+
+    _assert_b1_b2_comparable(config)
+    predictions_path = config.output_dir / "predictions.jsonl"
+    if predictions_path.exists() and not overwrite:
+        raise FileExistsError(f"refusing to overwrite existing run: {predictions_path}")
+    random.seed(config.seed)
+    dataset = GoodNewsDataset.from_config(config.dataset.config_path)
+    dataset.assert_split_integrity()
+    samples = select_samples(
+        dataset,
+        split=config.dataset.split,
+        max_samples=config.dataset.max_samples,
+        strategy=config.dataset.subset_strategy,
+    )
+    if len(samples) != 50:
+        raise ValueError(f"B2 requires exactly 50 selected samples, got {len(samples)}")
+    rankings = _load_b2_rankings(config.retrieval.rankings_path, samples, config)
+    generator = captioner or _make_b1_captioner(config)
+
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    resolved = _resolved_config(config)
+    write_json(config.output_dir / "config.resolved.json", resolved)
+    write_json(config.output_dir / "resolved_config.json", resolved)
+    write_json(config.output_dir / "generation_config.json", resolved["generation"])
+
+    started = time.perf_counter()
+    gpu_memory_start = _start_gpu_memory_tracking()
+    load_started = time.perf_counter()
+    generator.load()
+    model_load_seconds = time.perf_counter() - load_started
+    if not isinstance(generator, InstructBlipArticleCaptioner):
+        raise TypeError("B2 sentence-budget selection requires InstructBlipArticleCaptioner")
+    selection_started = time.perf_counter()
+    contexts: dict[str, str] = {}
+    selections: dict[str, dict[str, Any]] = {}
+    for sample in samples:
+        context, selection = _select_b2_context(
+            generator, sample, rankings[sample.sample_id], config.retrieval.k
+        )
+        contexts[sample.sample_id] = context
+        selections[sample.sample_id] = selection
+    selection_seconds = time.perf_counter() - selection_started
+    model_inputs = tuple(
+        FullArticleInput(sample.sample_id, sample.image_path, contexts[sample.sample_id])
+        for sample in samples
+    )
+    generation_started = time.perf_counter()
+    generated = generator.generate(model_inputs)
+    generation_seconds = time.perf_counter() - generation_started
+    gpu_memory = _finish_gpu_memory_tracking(gpu_memory_start)
+    write_json(config.output_dir / "gpu_memory.json", gpu_memory)
+    generated_by_id = {item.sample_id: item for item in generated}
+    if set(generated_by_id) != {sample.sample_id for sample in samples}:
+        raise RuntimeError("B2 captioner returned missing or unexpected sample IDs")
+
+    rows = []
+    evidence_rows = []
+    for sample in samples:
+        item = generated_by_id[sample.sample_id]
+        selection = selections[sample.sample_id]
+        if int(item.context_stats["used_article_tokens"]) != selection["context_token_count"]:
+            raise RuntimeError(f"B2 token accounting drift for {sample.sample_id}")
+        metadata = {
+            "dataset": "goodnews",
+            "official_split": sample.metadata.get("official_split"),
+            "image_path": sample.image_path,
+            "experiment": config.experiment,
+            "model_name": config.model.name,
+            "model_revision": config.model.revision,
+            "retrieval_method": config.retrieval.method,
+            "retrieval_k": config.retrieval.k,
+            **selection,
+        }
+        rows.append(
+            {
+                "sample_id": sample.sample_id,
+                "prediction": item.text,
+                "reference": sample.reference_caption,
+                "metadata": metadata,
+            }
+        )
+        evidence_rows.append(
+            {
+                "sample_id": sample.sample_id,
+                "retrieval_method": config.retrieval.method,
+                "retrieval_k": config.retrieval.k,
+                **selection,
+            }
+        )
+    _write_jsonl(predictions_path, rows)
+    _write_jsonl(config.output_dir / "selected_evidence.jsonl", evidence_rows)
+
+    context_tokens = [selection["context_token_count"] for selection in selections.values()]
+    selected_counts = [selection["selected_sentence_count"] for selection in selections.values()]
+    selected_scores = [
+        score
+        for selection in selections.values()
+        for score in selection["selected_ranking_scores"]
+    ]
+    context_summary = {
+        "samples": len(samples),
+        "retrieval_method": config.retrieval.method,
+        "k": config.retrieval.k,
+        "max_context_tokens": config.context.max_context_tokens,
+        "mean_selected_sentence_count": sum(selected_counts) / len(selected_counts),
+        "mean_context_tokens": sum(context_tokens) / len(context_tokens),
+        "mean_selected_retrieval_score": (
+            sum(selected_scores) / len(selected_scores) if selected_scores else None
+        ),
+        "samples_with_budget_skips": sum(
+            bool(selection["skipped_sentence_ids_for_budget"])
+            for selection in selections.values()
+        ),
+        "samples_with_truncated_fallback": sum(
+            bool(selection["fallback_sentence_truncated"])
+            for selection in selections.values()
+        ),
+    }
+    write_json(config.output_dir / "context_statistics.json", context_summary)
+    model_info = generator.model_info()
+    write_json(config.output_dir / "model.json", model_info)
+    write_json(
+        config.output_dir / "token_settings.json",
+        {**resolved["generation"], "context": resolved["context"], "tokenizer": model_info.get("tokenizer", {})},
+    )
+    manifest = {
+        "schema_version": 1,
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "experiment": config.experiment,
+        "input_contract": ["image", "selected_article_sentences", "fixed_instruction"],
+        "reference_passed_to_retriever": False,
+        "generated_caption_passed_to_retriever": False,
+        "reference_passed_to_model": False,
+        "selected_context_preserves_article_order": True,
+        "seed": config.seed,
+        "dataset": resolved["dataset"],
+        "retrieval": resolved["retrieval"],
+        "rankings_sha256": file_sha256(config.retrieval.rankings_path),
+        "model": model_info,
+        "git": _git_state(PROJECT_ROOT),
+        "predictions": {"path": str(predictions_path), "sha256": file_sha256(predictions_path), "samples": len(rows)},
+    }
+    write_json(config.output_dir / "manifest.json", manifest)
+    runtime = {
+        "status": "generated",
+        "samples": len(rows),
+        "model_load_seconds": model_load_seconds,
+        "sentence_selection_seconds": selection_seconds,
+        "generation_seconds": generation_seconds,
+        "samples_per_second": len(rows) / generation_seconds if generation_seconds else None,
+        "total_before_evaluation_seconds": time.perf_counter() - started,
+        "python": sys.version,
+        "platform": platform.platform(),
+        "packages": _versions(),
+        "gpu_memory": gpu_memory,
+    }
+    write_json(config.output_dir / "runtime.json", runtime)
+    evaluation = comparison = None
+    if config.evaluation.enabled:
+        evaluation = _run_evaluation(config, predictions_path)
+        comparison = _run_paired_comparisons(config)
+        runtime.update(
+            {
+                "status": "complete",
+                "evaluation_seconds": evaluation["seconds"],
+                "total_seconds": time.perf_counter() - started,
+            }
+        )
+        write_json(config.output_dir / "runtime.json", runtime)
+    return {
+        "predictions": str(predictions_path),
+        "metrics": str(config.output_dir / "metrics.json") if evaluation else None,
+        "comparison": comparison,
+        "context_statistics": context_summary,
+        "samples": len(rows),
     }

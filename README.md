@@ -143,6 +143,29 @@ decoding, seed, subset, and evaluator. The runner rejects B1 when any controlled
 field differs from its declared B0. The random condition is only a sanity
 control.
 
+## B2: top-k article sentences
+
+B2 keeps the controlled InstructBLIP B1 setup fixed and replaces the article
+body with k = 1, 3, or 5 selected sentences. Both BM25 and pinned CLIP
+image-sentence ranking are implemented. Ranking is reference-free, sentence
+order is restored before generation, and the exact prompt token budget is
+enforced and logged.
+
+Run all six fixed-50 development variants against the saved B1 outputs:
+
+```powershell
+python scripts/run_b2_validation.py `
+  --dataset-root "D:/Datasets/GoodNews_validation_50" `
+  --b1-dir "runs/instructblip_goodnews_validation_50/b1" `
+  --output-root "runs/goodnews_b2_validation_50" `
+  --bundle "artifacts/goodnews_b2_validation_50.zip"
+```
+
+See [`docs/b2_sentence_selection.md`](docs/b2_sentence_selection.md) for the
+selection rules, per-sample evidence logs, cloud command, paired-bootstrap
+analysis, and manual qualitative-review protocol. This stage does not include
+atomic evidence or claim-level alignment.
+
 ## B1: image plus full article (exploratory/legacy)
 
 B1 uses the same pinned BLIP checkpoint, development subset, seed, decoding,

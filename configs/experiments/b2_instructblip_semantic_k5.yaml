@@ -1,0 +1,11 @@
+experiment: B2_instructblip_sentence_context
+seed: 2026
+dataset: {name: goodnews, config: ../dataset/goodnews.example.yaml, split: dev, max_samples: 50, subset_strategy: first_by_sample_id}
+model: {type: instructblip, name: Salesforce/instructblip-flan-t5-xl, revision: bf9bd58cb3bb06e88c03b80f9cc346b90094bc6d, device: auto, dtype: float16, batch_size: 1}
+prompt: {instruction: "Describe the image in one factual news-style sentence.", context_prefix: "Article context:\n", context_suffix: "\n\n"}
+context: {max_context_tokens: 384, truncation: head}
+generation: {do_sample: false, num_beams: 3, max_new_tokens: 30, min_new_tokens: 1, no_repeat_ngram_size: 2, length_penalty: 1.0, early_stopping: true}
+retrieval: {method: semantic, k: 5, rankings_path: ../../runs/goodnews_b2_validation_50/retrieval/semantic.jsonl, model_name: openai/clip-vit-base-patch32, model_revision: b97b0100e55e367c057773c2a614676470b0d575}
+output_dir: ../../runs/goodnews_b2_validation_50/semantic_k5
+evaluation: {enabled: true, metrics: [cider, entity], allow_metric_errors: false, entity_extractor: spacy, spacy_model: en_core_web_sm}
+comparison: {baseline_config: b1_instructblip_article_context.yaml, baseline_per_sample: ../../runs/instructblip_goodnews_validation_50/b1/metrics_per_sample.csv, metrics: [CIDEr, EntityPrecision, EntityRecall, EntityF1], confidence: 0.95, resamples: 10000, seed: 2026}
