@@ -16,6 +16,9 @@ from typing import Any, Callable, Mapping
 
 PROMPT_VERSION = "llm_structured_atomic_v1"
 SCHEMA_VERSION = "atomic_propositions_schema_v1"
+RETRY_FORMAT_REMINDER = (
+    "Return a complete valid JSON object matching the schema. Do not truncate."
+)
 EVIDENCE_TYPES = (
     "entity",
     "object",
@@ -363,7 +366,9 @@ class StructuredAtomicExtractor:
             "cache_hit": cache_hit,
         }
 
-    def _request_body(self, sentence: str) -> dict[str, Any]:
+    def _request_body(
+        self, sentence: str, *, include_retry_format_reminder: bool = False
+    ) -> dict[str, Any]:
         if self.config.structured_output_mode == "json_schema":
             response_format: dict[str, Any] = {
                 "type": "json_schema",
@@ -375,10 +380,13 @@ class StructuredAtomicExtractor:
             }
         else:
             response_format = {"type": "json_object"}
+        system_prompt = SYSTEM_PROMPT
+        if include_retry_format_reminder:
+            system_prompt += "\n\n" + RETRY_FORMAT_REMINDER
         body = {
             "model": self.config.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": sentence},
             ],
             "response_format": response_format,
@@ -444,11 +452,15 @@ class StructuredAtomicExtractor:
                 cache_hit=True,
             )
 
-        body = self._request_body(sentence)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         last_error: Exception | None = None
+        include_retry_format_reminder = False
         for attempt in range(1, self.config.max_attempts + 1):
             response: Any = None
+            body = self._request_body(
+                sentence,
+                include_retry_format_reminder=include_retry_format_reminder,
+            )
             self._stats["request_count"] += 1
             if attempt > 1:
                 self._stats["retry_count"] += 1
@@ -493,6 +505,8 @@ class StructuredAtomicExtractor:
                 if response is not None:
                     self._stats["malformed_response_count"] += 1
                 self.cache.put_attempt(cache_key, attempt, body, response=response, error=str(exc))
+                if isinstance(exc, json.JSONDecodeError):
+                    include_retry_format_reminder = True
         raise StructuredExtractionError(
             f"failed after {self.config.max_attempts} attempts: {last_error}"
         )

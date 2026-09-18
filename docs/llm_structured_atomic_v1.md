@@ -22,3 +22,10 @@ temperature through runtime configuration. Temperature is part of the
 extraction-content cache key, with omission represented as provider_default, so
 explicit and provider-default sampling configurations cannot share cached
 content.
+
+If a response contains malformed or truncated JSON, the first retry uses the
+same model, source sentence, extraction instructions, and JSON schema. It adds
+only this formatting reminder: "Return a complete valid JSON object matching
+the schema. Do not truncate." Every raw failed response remains in the
+append-only response_attempts table, and malformed content is never written to
+the final extraction-content cache.

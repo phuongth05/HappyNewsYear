@@ -7,6 +7,7 @@ import pytest
 
 from kric.evidence.llm_structured import (
     LlmEndpointConfig,
+    RETRY_FORMAT_REMINDER,
     StructuredAtomicExtractor,
     StructuredExtractionError,
     align_source_span,
@@ -235,7 +236,10 @@ def test_malformed_response_is_retried(monkeypatch, tmp_path):
         _response({"propositions": []}),
     ]
 
-    def post(*_args):
+    calls = []
+
+    def post(_url, _headers, body, _timeout):
+        calls.append(body)
         return responses.pop(0)
 
     extractor = StructuredAtomicExtractor(
@@ -250,6 +254,105 @@ def test_malformed_response_is_retried(monkeypatch, tmp_path):
     assert extractor.stats()["retry_count"] == 1
     assert extractor.stats()["failed_request_count"] == 1
     assert extractor.stats()["malformed_response_count"] == 1
+    assert calls[0]["messages"][1] == calls[1]["messages"][1]
+    assert RETRY_FORMAT_REMINDER not in calls[0]["messages"][0]["content"]
+    assert RETRY_FORMAT_REMINDER not in calls[1]["messages"][0]["content"]
+    assert calls[0]["response_format"] == calls[1]["response_format"]
+
+
+def test_malformed_raw_attempt_is_preserved_and_only_valid_content_is_cached(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("TEST_LLM_KEY", "secret")
+    sentence = "The council approved the plan."
+    malformed_content = (
+        '{"propositions":[{"text":"The council approved the plan.",'
+        '"type":"event","source_span_text":"The council approved'
+    )
+    responses = [
+        {
+            "id": "bad-response",
+            "model": "gpt-5.6-terra",
+            "choices": [{"message": {"content": malformed_content}}],
+        },
+        _response(
+            {
+                "propositions": [
+                    {
+                        "text": "The council approved the plan.",
+                        "type": "event",
+                        "source_span_text": "The council approved the plan",
+                    }
+                ]
+            },
+            model="gpt-5.6-terra",
+        ),
+    ]
+    calls = []
+
+    def post(_url, _headers, body, _timeout):
+        calls.append(body)
+        return responses.pop(0)
+
+    cache_path = tmp_path / "cache.sqlite3"
+    extractor = StructuredAtomicExtractor(
+        LlmEndpointConfig(
+            "https://api.openai.com/v1",
+            "gpt-5.6-terra",
+            "TEST_LLM_KEY",
+            max_attempts=2,
+        ),
+        cache_path,
+        post_json=post,
+    )
+    result = extractor.extract(
+        sentence,
+        sample_id="sample-current",
+        source_sentence_id="sentence-current",
+        source_rank=2,
+        ranking_score=0.77,
+    )
+    cached = extractor.extract(
+        sentence,
+        sample_id="sample-cache",
+        source_sentence_id="sentence-cache",
+        source_rank=3,
+        ranking_score=0.55,
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["messages"][1]["content"] == sentence
+    assert calls[1]["messages"][1]["content"] == sentence
+    assert calls[0]["response_format"] == calls[1]["response_format"]
+    assert RETRY_FORMAT_REMINDER not in calls[0]["messages"][0]["content"]
+    assert calls[1]["messages"][0]["content"].endswith(RETRY_FORMAT_REMINDER)
+    retry_json = json.dumps(calls[1])
+    for forbidden in (
+        "reference_caption",
+        "generated_caption",
+        "full_article",
+        "gold_entities",
+        "human_labels",
+    ):
+        assert forbidden not in retry_json
+    assert result["propositions"][0]["provenance"]["sample_id"] == "sample-current"
+    assert cached["cache_hit"] is True
+    assert cached["propositions"][0]["provenance"]["sample_id"] == "sample-cache"
+    assert cached["propositions"][0]["provenance"]["source_sentence_id"] == "sentence-cache"
+    with sqlite3.connect(cache_path) as connection:
+        attempts = connection.execute(
+            "SELECT attempt, response_json, error FROM response_attempts ORDER BY id"
+        ).fetchall()
+        finals = connection.execute(
+            "SELECT content_json FROM extraction_content_cache"
+        ).fetchall()
+    assert len(attempts) == 2
+    stored_failed_response = json.loads(attempts[0][1])
+    assert stored_failed_response["choices"][0]["message"]["content"] == malformed_content
+    assert "Unterminated string" in attempts[0][2]
+    assert attempts[1][2] is None
+    assert len(finals) == 1
+    assert "bad-response" not in finals[0][0]
 
 
 def test_missing_credentials_fail_before_network(tmp_path):
