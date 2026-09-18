@@ -31,6 +31,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", default="gpt-5.6-terra")
     parser.add_argument("--model-revision")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Omit to use the provider/model default; required for gpt-5.6-terra",
+    )
     parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
     parser.add_argument(
         "--structured-output-mode", choices=("json_schema", "json_object"), default="json_schema"
@@ -126,6 +132,7 @@ def main() -> None:
         api_key_env=args.api_key_env,
         model_revision=args.model_revision,
         structured_output_mode=args.structured_output_mode,
+        temperature=args.temperature,
         timeout_seconds=args.timeout_seconds,
         max_attempts=args.max_attempts,
     )
@@ -266,7 +273,10 @@ def main() -> None:
         "actual_response_model_ids": response_models,
         "provider_response_snapshots": response_snapshots or ["unavailable"],
         "structured_output_mode": args.structured_output_mode,
-        "temperature": 0,
+        "requested_temperature": args.temperature,
+        "effective_temperature": (
+            "provider_default" if args.temperature is None else args.temperature
+        ),
         "max_attempts": args.max_attempts,
         "cache": str(cache_dir / "llm_response_cache.sqlite3"),
         "api_accounting": extractor.stats(),

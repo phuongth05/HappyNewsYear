@@ -66,7 +66,7 @@ def test_extractor_sends_only_one_sentence_and_caches(monkeypatch, tmp_path):
     sentence = "Barack Obama spoke in Paris."
     first = extractor.extract(sentence, sample_id="s1", source_sentence_id="sent1")
     second = extractor.extract(sentence, sample_id="s1", source_sentence_id="sent1")
-    assert calls[0]["temperature"] == 0
+    assert "temperature" not in calls[0]
     assert calls[0]["messages"][1] == {"role": "user", "content": sentence}
     assert "reference" not in json.dumps(calls[0]).lower()
     assert first["propositions"][0]["source_span"]["alignment"] == "exact"
@@ -335,3 +335,126 @@ def test_openai_base_url_response_metadata_and_usage(monkeypatch, tmp_path):
         "total_input_tokens": 41,
         "total_output_tokens": 7,
     }
+
+
+def test_gpt_5_6_terra_omits_temperature(monkeypatch, tmp_path):
+    monkeypatch.setenv("TEST_LLM_KEY", "secret")
+    calls = []
+
+    def post(_url, _headers, body, _timeout):
+        calls.append(body)
+        return _response({"propositions": []}, model="gpt-5.6-terra")
+
+    extractor = StructuredAtomicExtractor(
+        LlmEndpointConfig(
+            "https://api.openai.com/v1",
+            "gpt-5.6-terra",
+            "TEST_LLM_KEY",
+            temperature=None,
+        ),
+        tmp_path / "cache.sqlite3",
+        post_json=post,
+    )
+    extractor.extract("Sentence.", sample_id="s", source_sentence_id="x")
+    assert "temperature" not in calls[0]
+
+
+def test_compatible_model_can_include_configured_temperature(monkeypatch, tmp_path):
+    monkeypatch.setenv("TEST_LLM_KEY", "secret")
+    calls = []
+
+    def post(_url, _headers, body, _timeout):
+        calls.append(body)
+        return _response({"propositions": []})
+
+    extractor = StructuredAtomicExtractor(
+        LlmEndpointConfig(
+            "https://example.invalid/v1",
+            "compatible-model",
+            "TEST_LLM_KEY",
+            temperature=0.25,
+        ),
+        tmp_path / "cache.sqlite3",
+        post_json=post,
+    )
+    extractor.extract("Sentence.", sample_id="s", source_sentence_id="x")
+    assert calls[0]["temperature"] == 0.25
+
+
+def test_provider_default_temperature_preserves_cache_and_provenance(monkeypatch, tmp_path):
+    monkeypatch.setenv("TEST_LLM_KEY", "secret")
+    calls = []
+
+    def post(_url, _headers, body, _timeout):
+        calls.append(body)
+        return _response(
+            {
+                "propositions": [
+                    {
+                        "text": "A statement was made.",
+                        "type": "event",
+                        "source_span_text": "A statement was made",
+                    }
+                ]
+            }
+        )
+
+    extractor = StructuredAtomicExtractor(
+        LlmEndpointConfig(
+            "https://api.openai.com/v1",
+            "gpt-5.6-terra",
+            "TEST_LLM_KEY",
+        ),
+        tmp_path / "cache.sqlite3",
+        post_json=post,
+    )
+    sentence = "A statement was made."
+    extractor.extract(sentence, sample_id="a", source_sentence_id="x", source_rank=1)
+    cached = extractor.extract(
+        sentence,
+        sample_id="b",
+        source_sentence_id="y",
+        source_rank=2,
+        ranking_score=0.5,
+    )
+    assert len(calls) == 1
+    assert cached["cache_hit"] is True
+    assert cached["propositions"][0]["provenance"]["sample_id"] == "b"
+    assert cached["propositions"][0]["provenance"]["source_sentence_id"] == "y"
+    assert cached["propositions"][0]["provenance"]["ranking_score"] == 0.5
+
+
+def test_temperature_configuration_is_part_of_content_cache_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("TEST_LLM_KEY", "secret")
+    calls = []
+
+    def post(_url, _headers, body, _timeout):
+        calls.append(body)
+        return _response({"propositions": []})
+
+    cache_path = tmp_path / "cache.sqlite3"
+    provider_default = StructuredAtomicExtractor(
+        LlmEndpointConfig(
+            "https://example.invalid/v1",
+            "compatible-model",
+            "TEST_LLM_KEY",
+            temperature=None,
+        ),
+        cache_path,
+        post_json=post,
+    )
+    explicit = StructuredAtomicExtractor(
+        LlmEndpointConfig(
+            "https://example.invalid/v1",
+            "compatible-model",
+            "TEST_LLM_KEY",
+            temperature=0.25,
+        ),
+        cache_path,
+        post_json=post,
+    )
+    provider_default.extract("Sentence.", sample_id="a", source_sentence_id="x")
+    explicit.extract("Sentence.", sample_id="b", source_sentence_id="y")
+    assert len(calls) == 2
+    assert "temperature" not in calls[0]
+    assert calls[1]["temperature"] == 0.25

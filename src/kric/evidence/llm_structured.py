@@ -219,6 +219,7 @@ class LlmEndpointConfig:
     api_key_env: str = "OPENAI_API_KEY"
     model_revision: str | None = None
     structured_output_mode: str = "json_schema"
+    temperature: float | None = None
     timeout_seconds: float = 120.0
     max_attempts: int = 3
 
@@ -243,6 +244,10 @@ class StructuredAtomicExtractor:
     ):
         if config.structured_output_mode not in {"json_schema", "json_object"}:
             raise ValueError("structured_output_mode must be json_schema or json_object")
+        if config.model == "gpt-5.6-terra" and config.temperature is not None:
+            raise ValueError("gpt-5.6-terra requires provider-default temperature")
+        if config.temperature is not None and not 0 <= config.temperature <= 2:
+            raise ValueError("temperature must be between 0 and 2")
         if config.max_attempts <= 0:
             raise ValueError("max_attempts must be positive")
         if config.timeout_seconds <= 0:
@@ -293,6 +298,11 @@ class StructuredAtomicExtractor:
                 "api_url": self.config.api_url,
                 "sentence": sentence,
                 "structured_output_mode": self.config.structured_output_mode,
+                "temperature": (
+                    "provider_default"
+                    if self.config.temperature is None
+                    else self.config.temperature
+                ),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -365,15 +375,17 @@ class StructuredAtomicExtractor:
             }
         else:
             response_format = {"type": "json_object"}
-        return {
+        body = {
             "model": self.config.model,
-            "temperature": 0,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": sentence},
             ],
             "response_format": response_format,
         }
+        if self.config.temperature is not None:
+            body["temperature"] = self.config.temperature
+        return body
 
     @staticmethod
     def _content(response: Mapping[str, Any]) -> str:
