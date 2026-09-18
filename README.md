@@ -178,6 +178,23 @@ python scripts/check_evaluation_dependencies.py `
   --output artifacts/evaluator_readiness/current_interpreter.json
 ```
 
+## M3: atomic evidence audit
+
+The first atomic-granularity stage consumes only the frozen B2 semantic-k3
+selected sentences. It deterministically extracts proposition-level evidence,
+preserves sentence/span provenance, caches outputs, audits quality, and creates
+both 384-token and B2-token-matched untyped contexts. It does not run caption
+generation or learned evidence-claim matching.
+
+```powershell
+python scripts/extract_atomic_evidence.py `
+  --config configs/experiments/m3_atomic_evidence_audit.yaml
+```
+
+See [`docs/m3_atomic_evidence_audit.md`](docs/m3_atomic_evidence_audit.md) for
+the exact schema, frozen-input checks, extraction method, audit definitions,
+and manual-review worksheet.
+
 ## B1: image plus full article (exploratory/legacy)
 
 B1 uses the same pinned BLIP checkpoint, development subset, seed, decoding,

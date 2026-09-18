@@ -1,0 +1,23 @@
+experiment: M3_atomic_evidence_audit
+source:
+  selected_evidence: ../../artifacts/frozen_b2/goodnews_b2_validation_50/semantic_k3/selected_evidence.jsonl
+  ids: ../dataset/goodnews_validation_50_ids.json
+  retrieval_method: semantic
+  retrieval_k: 3
+  retrieval_model: openai/clip-vit-base-patch32
+  retrieval_revision: b97b0100e55e367c057773c2a614676470b0d575
+extractor:
+  method: deterministic_spacy_dependency_and_ner
+  model: en_core_web_sm
+  rule_set_version: spacy_dependency_atomic_v1
+  prompt_version: not_applicable_rule_based_v1
+  temperature: null
+tokenizer:
+  name: Salesforce/instructblip-flan-t5-xl
+  revision: bf9bd58cb3bb06e88c03b80f9cc346b90094bc6d
+audit:
+  context_budget: 384
+  manual_review_count: 100
+output_dir: ../../artifacts/m3_atomic_evidence_50
+cache: ../../artifacts/m3_atomic_evidence_50/atomic_extraction_cache.sqlite3
+
