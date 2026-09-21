@@ -23,6 +23,7 @@ from kric.captioning.instructblip import _InstructBlipCaptioner  # noqa: E402
 from kric.evidence.llm_frozen_pipeline import (  # noqa: E402
     RETRIEVAL_MODEL,
     RETRIEVAL_REVISION,
+    load_reviewed_comparison,
     load_verified_frozen_b2,
     prepare_cache,
     run_frozen_llm_extraction,
@@ -128,6 +129,11 @@ def main() -> int:
         type=Path,
         help="Validated prior LLM cache used only to seed an absent output cache",
     )
+    parser.add_argument(
+        "--reviewed-comparison-csv",
+        type=Path,
+        help="Exact reviewed side-by-side CSV used to recover successful LLM evidence",
+    )
     args = parser.parse_args()
 
     config_path = args.config.expanduser().resolve()
@@ -145,6 +151,11 @@ def main() -> int:
         if configured_cache_source
         else None
     )
+    reviewed_comparison = (
+        args.reviewed_comparison_csv.expanduser().resolve()
+        if args.reviewed_comparison_csv
+        else None
+    )
     paths = {
         "selected_evidence": _resolve(base, source["selected_evidence"]),
         "rankings": _resolve(base, source["rankings"]),
@@ -159,12 +170,24 @@ def main() -> int:
         paths["resolved_config"],
         paths["ids"],
     )
+    recovered_evidence = {}
+    reviewed_recovery = None
+    if reviewed_comparison is not None:
+        if not reviewed_comparison.is_file():
+            raise SystemExit(f"reviewed comparison CSV not found: {reviewed_comparison}")
+        recovered_evidence, reviewed_recovery = load_reviewed_comparison(
+            reviewed_comparison, selected_rows
+        )
     api_key_env = raw["extractor"]["api_key_env"]
     preflight_errors = []
-    if not cache_path.is_file() and cache_source is None:
+    if (
+        not cache_path.is_file()
+        and cache_source is None
+        and reviewed_comparison is None
+    ):
         preflight_errors.append(
-            "no validated prior cache was provided; pass --cache-source or restore the "
-            "existing output cache so reviewed results are not re-sampled"
+            "no recoverable reviewed source was provided; pass --reviewed-comparison-csv, "
+            "--cache-source, or restore the existing output cache"
         )
     elif cache_source is not None and not cache_source.is_file() and not cache_path.is_file():
         preflight_errors.append(f"validated cache source not found: {cache_source}")
@@ -199,9 +222,19 @@ def main() -> int:
         ),
         output_dir=output_dir,
         context_budget=int(raw["context"]["max_tokens"]),
+        recovered_evidence=recovered_evidence,
     )
     cache_report["sha256_after_run"] = _sha256(cache_path)
     audit["cache"] = cache_report
+    audit["reviewed_recovery"] = reviewed_recovery or {
+        "source_file": None,
+        "source_file_sha256": None,
+        "reviewed_rows": 0,
+        "recovered_success_rows": 0,
+        "reviewed_failure_rows": 0,
+        "previous_failure_rows": 0,
+        "validation_failures": 0,
+    }
     (output_dir / "audit.json").write_text(
         json.dumps(audit, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
@@ -267,6 +300,7 @@ def main() -> int:
             for sentence_id in row["selected_sentence_ids"]
         ],
         "cache": cache_report,
+        "reviewed_recovery": audit["reviewed_recovery"],
         "api_accounting": audit["api"],
         "caption_generation_run": False,
         "spacy_fallback_used": False,

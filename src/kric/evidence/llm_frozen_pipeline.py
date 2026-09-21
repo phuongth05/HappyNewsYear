@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
@@ -12,7 +13,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from .llm_structured import EVIDENCE_TYPES, PROMPT_VERSION, SCHEMA_VERSION
+from .llm_structured import (
+    EVIDENCE_TYPES,
+    PROMPT_VERSION,
+    SCHEMA_VERSION,
+    stable_evidence_id,
+)
 
 
 RETRIEVAL_MODEL = "openai/clip-vit-base-patch32"
@@ -166,6 +172,169 @@ def load_verified_frozen_b2(
     return selected_rows
 
 
+def load_reviewed_comparison(
+    path: Path,
+    selected_rows: Sequence[Mapping[str, Any]],
+    *,
+    expected_reviewed_rows: int = 100,
+    expected_success_rows: int = 99,
+    expected_failure_rows: int = 1,
+) -> tuple[dict[tuple[str, str], list[dict[str, Any]]], dict[str, Any]]:
+    """Recover exact reviewed LLM units after strict frozen-source validation."""
+
+    frozen: dict[tuple[str, str], dict[str, Any]] = {}
+    for sample in selected_rows:
+        for sentence_id, source_rank, score, text in zip(
+            sample["selected_sentence_ids"],
+            sample["selected_ranks"],
+            sample["selected_ranking_scores"],
+            sample["selected_sentence_texts"],
+            strict=True,
+        ):
+            key = (str(sample["sample_id"]), str(sentence_id))
+            if key in frozen:
+                raise ValueError(f"duplicate frozen source key: {key}")
+            frozen[key] = {
+                "sample_id": key[0],
+                "source_sentence_id": key[1],
+                "source_rank": int(source_rank),
+                "ranking_score": float(score),
+                "source_sentence": str(text),
+            }
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {
+            "sample_id",
+            "source_sentence_id",
+            "source_rank",
+            "source_sentence",
+            "llm_status",
+            "llm_units_json",
+            "llm_unit_count",
+            "llm_failure_type",
+            "llm_failure_message",
+        }
+        missing = required - set(reader.fieldnames or ())
+        if missing:
+            raise ValueError(f"reviewed comparison is missing columns: {sorted(missing)}")
+        rows = [dict(row) for row in reader]
+    if len(rows) != expected_reviewed_rows:
+        raise ValueError(
+            f"expected {expected_reviewed_rows} reviewed rows, found {len(rows)}"
+        )
+
+    recovered: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    seen: set[tuple[str, str]] = set()
+    success_count = failure_count = 0
+    for row in rows:
+        key = (str(row["sample_id"]), str(row["source_sentence_id"]))
+        if not all(key) or key in seen:
+            raise ValueError(f"empty or duplicate reviewed source key: {key}")
+        seen.add(key)
+        source = frozen.get(key)
+        if source is None:
+            raise ValueError(f"reviewed source is not in frozen semantic-k3: {key}")
+        if (
+            int(row["source_rank"]) != source["source_rank"]
+            or row["source_sentence"] != source["source_sentence"]
+        ):
+            raise ValueError(f"reviewed source provenance mismatch for {key}")
+        status = str(row["llm_status"]).strip().casefold()
+        if status == "failed":
+            failure_count += 1
+            if int(row["llm_unit_count"] or 0) != 0:
+                raise ValueError(f"failed reviewed row contains LLM units for {key}")
+            try:
+                failed_units = json.loads(row["llm_units_json"] or "[]")
+            except json.JSONDecodeError as error:
+                raise ValueError(f"malformed llm_units_json for failed row {key}") from error
+            if failed_units != []:
+                raise ValueError(f"failed reviewed row contains LLM evidence for {key}")
+            continue
+        if status != "success":
+            raise ValueError(f"invalid llm_status for reviewed row {key}: {status!r}")
+        success_count += 1
+        try:
+            units = json.loads(row["llm_units_json"])
+        except json.JSONDecodeError as error:
+            raise ValueError(f"malformed llm_units_json for {key}") from error
+        if not isinstance(units, list) or len(units) != int(row["llm_unit_count"]):
+            raise ValueError(f"reviewed LLM unit count mismatch for {key}")
+        evidence_ids: set[str] = set()
+        for index, unit in enumerate(units):
+            if not isinstance(unit, dict):
+                raise ValueError(f"reviewed evidence unit is not an object for {key}")
+            required_unit = {
+                "evidence_id",
+                "text",
+                "type",
+                "source_span",
+                "provenance",
+            }
+            if required_unit - set(unit):
+                raise ValueError(f"reviewed evidence unit has an invalid schema for {key}")
+            text = unit["text"]
+            evidence_type = unit["type"]
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError(f"reviewed evidence unit has empty text for {key}")
+            if evidence_type not in EVIDENCE_TYPES:
+                raise ValueError(f"reviewed evidence unit has invalid type for {key}")
+            evidence_id = str(unit["evidence_id"])
+            if (
+                evidence_id
+                != stable_evidence_id(key[0], key[1], index, text, evidence_type)
+                or evidence_id in evidence_ids
+            ):
+                raise ValueError(f"reviewed evidence ID validation failed for {key}")
+            evidence_ids.add(evidence_id)
+            provenance = unit["provenance"]
+            if not isinstance(provenance, dict) or (
+                str(provenance.get("sample_id")) != key[0]
+                or str(provenance.get("source_sentence_id")) != key[1]
+                or int(provenance.get("source_rank", 0)) != source["source_rank"]
+                or not _same_float(
+                    provenance.get("ranking_score"), source["ranking_score"]
+                )
+                or provenance.get("source_sentence") != source["source_sentence"]
+            ):
+                raise ValueError(f"reviewed evidence provenance mismatch for {key}")
+            span = unit["source_span"]
+            if not isinstance(span, dict) or not isinstance(span.get("text"), str):
+                raise ValueError(f"reviewed evidence source span is malformed for {key}")
+            alignment = span.get("alignment")
+            if alignment == "exact":
+                start, end = span.get("start"), span.get("end")
+                if (
+                    not isinstance(start, int)
+                    or not isinstance(end, int)
+                    or start < 0
+                    or end <= start
+                    or end > len(source["source_sentence"])
+                    or source["source_sentence"][start:end] != span["text"]
+                ):
+                    raise ValueError(f"reviewed exact source span mismatch for {key}")
+            elif alignment == "unresolved":
+                if span.get("start") is not None or span.get("end") is not None:
+                    raise ValueError(f"reviewed unresolved span has offsets for {key}")
+            else:
+                raise ValueError(f"reviewed evidence span alignment is invalid for {key}")
+        recovered[key] = units
+    if success_count != expected_success_rows or failure_count != expected_failure_rows:
+        raise ValueError(
+            "reviewed comparison status counts changed: "
+            f"success={success_count}, failed={failure_count}"
+        )
+    return recovered, {
+        "source_file": str(path.resolve()),
+        "source_file_sha256": _sha256(path),
+        "reviewed_rows": len(rows),
+        "recovered_success_rows": success_count,
+        "reviewed_failure_rows": failure_count,
+        "previous_failure_rows": failure_count,
+        "validation_failures": 0,
+    }
+
+
 def prepare_cache(cache_path: Path, cache_source: Path | None) -> dict[str, Any]:
     """Seed a run cache once, never replacing an existing destination cache."""
 
@@ -281,6 +450,9 @@ def run_frozen_llm_extraction(
     token_counter: Callable[[str], int],
     output_dir: Path,
     context_budget: int = 384,
+    recovered_evidence: Mapping[
+        tuple[str, str], Sequence[Mapping[str, Any]]
+    ] | None = None,
 ) -> dict[str, Any]:
     """Extract, aggregate, audit, and freeze contexts without caption generation."""
 
@@ -288,6 +460,7 @@ def run_frozen_llm_extraction(
         raise ValueError("the frozen M3 full-context budget must remain 384 tokens")
     if len(selected_rows) != 50:
         raise ValueError("M3 requires exactly 50 frozen samples")
+    recovered_evidence = recovered_evidence or {}
     output_dir.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now(timezone.utc).isoformat()
     failures: list[dict[str, Any]] = []
@@ -302,6 +475,8 @@ def run_frozen_llm_extraction(
     total_units = 0
     all_three_completed = 0
     affected_samples: list[str] = []
+    recovered_outputs_reused = 0
+    api_extraction_targets = 0
 
     for row in selected_rows:
         sample_id = str(row["sample_id"])
@@ -321,6 +496,30 @@ def run_frozen_llm_extraction(
                 "ranking_score": float(ranking_score),
                 "source_sentence": str(source_text),
             }
+            key = (source["sample_id"], source["source_sentence_id"])
+            if key in recovered_evidence:
+                units = list(recovered_evidence[key])
+                result = {
+                    **source,
+                    "extractor": PROMPT_VERSION,
+                    "prompt_version": PROMPT_VERSION,
+                    "schema_version": SCHEMA_VERSION,
+                    "propositions": units,
+                    "cache_hit": False,
+                }
+                _validate_result(result, source)
+                units_per_sentence.append(len(units))
+                sentence_results.append(
+                    {
+                        **source,
+                        "status": "success",
+                        "origin": "reviewed_comparison_recovery",
+                        **result,
+                    }
+                )
+                recovered_outputs_reused += 1
+                continue
+            api_extraction_targets += 1
             try:
                 result = extractor.extract(
                     source["source_sentence"],
@@ -331,7 +530,14 @@ def run_frozen_llm_extraction(
                 )
                 _validate_result(result, source)
                 units_per_sentence.append(len(result["propositions"]))
-                sentence_results.append({**source, "status": "success", **dict(result)})
+                sentence_results.append(
+                    {
+                        **source,
+                        "status": "success",
+                        "origin": "api_extraction",
+                        **dict(result),
+                    }
+                )
             except Exception as error:  # Preserve explicit per-source failures.
                 failure = {
                     **source,
@@ -341,7 +547,13 @@ def run_frozen_llm_extraction(
                 failures.append(failure)
                 sample_failures.append(failure)
                 sentence_results.append(
-                    {**source, "status": "failed", "propositions": [], **failure}
+                    {
+                        **source,
+                        "status": "failed",
+                        "origin": "api_extraction",
+                        "propositions": [],
+                        **failure,
+                    }
                 )
         if not sample_failures:
             all_three_completed += 1
@@ -428,7 +640,13 @@ def run_frozen_llm_extraction(
         "status": "complete" if not failures else "complete_with_failures",
         "source_sentences_requested": 150,
         "source_sentences_completed": 150 - len(failures),
+        "final_completed_source_sentences": 150 - len(failures),
         "source_sentences_failed": len(failures),
+        "failures": len(failures),
+        "reviewed_outputs_reused": recovered_outputs_reused,
+        "api_extraction_targets": api_extraction_targets,
+        "new_api_extractions": extractor.stats().get("successful_request_count", 0),
+        "api_retries": extractor.stats().get("retry_count", 0),
         "samples": 50,
         "samples_with_all_3_sentences_completed": all_three_completed,
         "samples_affected_by_extraction_failures": affected_samples,
@@ -470,6 +688,7 @@ __all__ = [
     "RETRIEVAL_MODEL",
     "RETRIEVAL_REVISION",
     "format_atomic_context",
+    "load_reviewed_comparison",
     "load_verified_frozen_b2",
     "prepare_cache",
     "run_frozen_llm_extraction",

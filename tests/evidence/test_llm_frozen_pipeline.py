@@ -1,3 +1,4 @@
+import csv
 import hashlib
 import json
 from pathlib import Path
@@ -8,10 +9,12 @@ from kric.evidence.llm_frozen_pipeline import (
     RETRIEVAL_MODEL,
     RETRIEVAL_REVISION,
     _fit_closest,
+    load_reviewed_comparison,
     load_verified_frozen_b2,
     prepare_cache,
     run_frozen_llm_extraction,
 )
+from kric.evidence.llm_structured import stable_evidence_id
 
 
 def _write_jsonl(path: Path, rows) -> None:
@@ -166,6 +169,89 @@ def _word_tokens(text: str) -> int:
     return len(text.split())
 
 
+def _reviewed_csv(tmp_path: Path, selected_rows):
+    path = tmp_path / "human_review_side_by_side.csv"
+    sources = [
+        {
+            "sample_id": row["sample_id"],
+            "source_sentence_id": str(sentence_id),
+            "source_rank": int(rank),
+            "ranking_score": float(score),
+            "source_sentence": text,
+        }
+        for row in selected_rows
+        for sentence_id, rank, score, text in zip(
+            row["selected_sentence_ids"],
+            row["selected_ranks"],
+            row["selected_ranking_scores"],
+            row["selected_sentence_texts"],
+            strict=True,
+        )
+    ][:100]
+    fieldnames = [
+        "sample_id",
+        "source_sentence_id",
+        "source_rank",
+        "source_sentence",
+        "llm_status",
+        "llm_units",
+        "llm_units_json",
+        "llm_unit_count",
+        "llm_failure_type",
+        "llm_failure_message",
+        "spacy_units",
+        "notes",
+    ]
+    expected = {}
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for index, source in enumerate(sources):
+            failed = index == 57
+            text = f"Reviewed proposition {index}."
+            units = [] if failed else [
+                {
+                    "evidence_id": stable_evidence_id(
+                        source["sample_id"],
+                        source["source_sentence_id"],
+                        0,
+                        text,
+                        "event",
+                    ),
+                    "text": text,
+                    "type": "event",
+                    "source_span": {
+                        "text": source["source_sentence"],
+                        "start": 0,
+                        "end": len(source["source_sentence"]),
+                        "alignment": "exact",
+                    },
+                    "provenance": dict(source),
+                }
+            ]
+            key = (source["sample_id"], source["source_sentence_id"])
+            if not failed:
+                expected[key] = units
+            encoded = json.dumps(units, ensure_ascii=False)
+            writer.writerow(
+                {
+                    "sample_id": source["sample_id"],
+                    "source_sentence_id": source["source_sentence_id"],
+                    "source_rank": source["source_rank"],
+                    "source_sentence": source["source_sentence"],
+                    "llm_status": "failed" if failed else "success",
+                    "llm_units": encoded,
+                    "llm_units_json": encoded,
+                    "llm_unit_count": len(units),
+                    "llm_failure_type": "SyntheticFailure" if failed else "",
+                    "llm_failure_message": "reviewed failure" if failed else "",
+                    "spacy_units": "SPACY_MARKER_MUST_NOT_REACH_EXTRACTOR",
+                    "notes": "HUMAN_LABEL_MARKER_MUST_NOT_REACH_EXTRACTOR",
+                }
+            )
+    return path, expected, sources[57]
+
+
 def test_frozen_loader_cross_checks_rankings_and_exact_150(tmp_path):
     paths = _frozen_artifacts(tmp_path)
     rows = load_verified_frozen_b2(*paths[:5])
@@ -259,3 +345,77 @@ def test_token_matching_uses_closest_order_preserving_subset_without_padding():
     assert [unit["evidence_id"] for unit in selected] == ["short-a", "short-b"]
     assert tokens == 5
     assert dropped == ["long"]
+
+
+def test_reviewed_recovery_preserves_exact_units_and_skips_api(tmp_path):
+    *_, selected_rows = _frozen_artifacts(tmp_path)
+    review_path, expected, failed_source = _reviewed_csv(tmp_path, selected_rows)
+    recovered, report = load_reviewed_comparison(review_path, selected_rows)
+    assert report["reviewed_rows"] == 100
+    assert report["recovered_success_rows"] == 99
+    assert report["reviewed_failure_rows"] == 1
+    assert report["previous_failure_rows"] == 1
+    assert report["validation_failures"] == 0
+    assert recovered == expected
+    first_key = next(iter(expected))
+    assert recovered[first_key][0]["evidence_id"] == expected[first_key][0]["evidence_id"]
+    assert (
+        failed_source["sample_id"],
+        failed_source["source_sentence_id"],
+    ) not in recovered
+
+    extractor = FakeExtractor()
+    output = tmp_path / "recovered-output"
+    audit = run_frozen_llm_extraction(
+        selected_rows=selected_rows,
+        extractor=extractor,
+        token_counter=_word_tokens,
+        output_dir=output,
+        recovered_evidence=recovered,
+    )
+    assert audit["reviewed_outputs_reused"] == 99
+    assert audit["api_extraction_targets"] == 51
+    assert len(extractor.received) == 51
+    assert all("MARKER_MUST_NOT_REACH_EXTRACTOR" not in value for value in extractor.received)
+    evidence = [
+        json.loads(line)
+        for line in (output / "atomic_evidence.jsonl").read_text().splitlines()
+    ]
+    recovered_sentence = next(
+        sentence
+        for sample in evidence
+        for sentence in sample["sentences"]
+        if (
+            sentence["sample_id"],
+            sentence["source_sentence_id"],
+        )
+        == first_key
+    )
+    assert recovered_sentence["origin"] == "reviewed_comparison_recovery"
+    assert recovered_sentence["propositions"] == expected[first_key]
+
+
+def test_reviewed_recovery_aborts_on_source_mismatch(tmp_path):
+    *_, selected_rows = _frozen_artifacts(tmp_path)
+    review_path, _, _ = _reviewed_csv(tmp_path, selected_rows)
+    rows = list(csv.DictReader(review_path.open(encoding="utf-8-sig", newline="")))
+    rows[0]["source_sentence"] = "Changed source text."
+    with review_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0])
+        writer.writeheader()
+        writer.writerows(rows)
+    with pytest.raises(ValueError, match="source provenance mismatch"):
+        load_reviewed_comparison(review_path, selected_rows)
+
+
+def test_reviewed_recovery_aborts_on_malformed_units_json(tmp_path):
+    *_, selected_rows = _frozen_artifacts(tmp_path)
+    review_path, _, _ = _reviewed_csv(tmp_path, selected_rows)
+    rows = list(csv.DictReader(review_path.open(encoding="utf-8-sig", newline="")))
+    rows[0]["llm_units_json"] = '{"unterminated":'
+    with review_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0])
+        writer.writeheader()
+        writer.writerows(rows)
+    with pytest.raises(ValueError, match="malformed llm_units_json"):
+        load_reviewed_comparison(review_path, selected_rows)
