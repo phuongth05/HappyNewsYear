@@ -200,6 +200,7 @@ def test_primary_analysis_uses_same_exact_49_for_all_methods(tmp_path):
         contexts,
         contexts,
         {},
+        "synthetic_test_provenance",
     )
     run_primary_analysis(frozen=frozen, b2_dir=b2_dir, output_root=output)
     summary = json.loads(

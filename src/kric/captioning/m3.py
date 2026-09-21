@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from kric.captioning.b2_regenerated import validate_m3_b2_provenance
 from kric.evaluation.bootstrap import paired_bootstrap_ci
 from kric.evaluation.io import file_sha256, load_predictions, write_json
 
@@ -192,6 +193,7 @@ class FrozenM3Inputs:
     full_contexts: tuple[dict[str, Any], ...]
     matched_contexts: tuple[dict[str, Any], ...]
     b2_resolved: dict[str, Any]
+    b2_provenance_status: str
 
 
 def load_frozen_m3_inputs(
@@ -222,16 +224,12 @@ def load_frozen_m3_inputs(
             raise FileNotFoundError(f"missing frozen artifacts in {directory}: {missing}")
     b2_manifest = json.loads((b2_dir / "manifest.json").read_text(encoding="utf-8"))
     b2_resolved = json.loads((b2_dir / "resolved_config.json").read_text(encoding="utf-8"))
+    atomic_manifest = json.loads((atomic_dir / "manifest.json").read_text(encoding="utf-8"))
     validate_generator_control(b2_resolved)
     if b2_manifest.get("experiment") != "B2_instructblip_sentence_context":
         raise ValueError("unexpected frozen B2 experiment")
     prediction_path = b2_dir / "predictions.jsonl"
-    prediction_meta = b2_manifest.get("predictions", {})
-    if (
-        prediction_meta.get("sha256") != file_sha256(prediction_path)
-        or int(prediction_meta.get("samples", 0)) != 50
-    ):
-        raise ValueError("frozen B2 prediction provenance mismatch")
+
     model = b2_manifest.get("model", {})
     if (
         model.get("name") != MODEL_NAME
@@ -253,6 +251,12 @@ def load_frozen_m3_inputs(
     for name, rows in (("B2 predictions", b2_predictions), ("selected evidence", selected)):
         if [str(row.get("sample_id")) for row in rows] != ids_50:
             raise ValueError(f"{name} IDs/order differ from frozen 50")
+    b2_provenance_status = validate_m3_b2_provenance(
+        b2_dir=b2_dir,
+        atomic_manifest=atomic_manifest,
+        resolved=b2_resolved,
+        expected_ids=ids_50,
+    )
     for prediction, evidence in zip(b2_predictions, selected, strict=True):
         metadata = prediction["metadata"]
         for field in (
@@ -267,7 +271,6 @@ def load_frozen_m3_inputs(
             if metadata.get(field) != evidence.get(field):
                 raise ValueError(f"B2 prediction/evidence mismatch for {prediction['sample_id']}:{field}")
 
-    atomic_manifest = json.loads((atomic_dir / "manifest.json").read_text(encoding="utf-8"))
     audit = json.loads((atomic_dir / "audit.json").read_text(encoding="utf-8"))
     if atomic_manifest.get("caption_generation_run") is not False:
         raise ValueError("atomic manifest does not represent extraction-only frozen evidence")
@@ -320,6 +323,7 @@ def load_frozen_m3_inputs(
     return FrozenM3Inputs(
         tuple(ids_50), tuple(ids_49), tuple(b2_predictions), tuple(selected),
         tuple(atomic_evidence), tuple(full), tuple(matched), b2_resolved,
+        b2_provenance_status,
     )
 
 

@@ -366,6 +366,7 @@ def main() -> int:
                 _resolve_config_path(config, "primary_ids_49")
             ),
         },
+        "b2_provenance_status": frozen.b2_provenance_status,
         "b2_generation_reused": True,
         "b2_generation_rerun": False,
         "atomic_extraction_invoked": False,
