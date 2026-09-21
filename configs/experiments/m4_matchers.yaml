@@ -1,0 +1,11 @@
+experiment: M4_matcher_baselines_49
+cosine:
+  model: sentence-transformers/all-MiniLM-L6-v2
+  revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+  batch_size: 64
+  device: null
+nli:
+  model: cross-encoder/nli-deberta-v3-small
+  revision: fa2804872c3b4bd748f38c0185cc85775361e735
+  batch_size: 32
+  device: auto

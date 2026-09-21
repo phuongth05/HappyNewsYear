@@ -32,6 +32,11 @@ captioning = [
 ner = [
   "spacy>=3.7",
 ]
+matching = [
+  "sentence-transformers>=3.0,<6",
+  "torch>=2.0",
+  "transformers>=4.46,<6",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
