@@ -1,0 +1,30 @@
+experiment: M3_llm_atomic_frozen_50
+source:
+  selected_evidence: ../../artifacts/frozen_b2/goodnews_b2_validation_50/semantic_k3/selected_evidence.jsonl
+  rankings: ../../artifacts/frozen_b2/goodnews_b2_validation_50/retrieval/semantic.jsonl
+  manifest: ../../artifacts/frozen_b2/goodnews_b2_validation_50/semantic_k3/manifest.json
+  resolved_config: ../../artifacts/frozen_b2/goodnews_b2_validation_50/semantic_k3/resolved_config.json
+  ids: ../dataset/goodnews_validation_50_ids.json
+  retrieval_method: semantic
+  retrieval_k: 3
+  retrieval_model: openai/clip-vit-base-patch32
+  retrieval_revision: b97b0100e55e367c057773c2a614676470b0d575
+extractor:
+  method: llm_structured_atomic_v1
+  api_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  model: gpt-5.6-terra
+  model_revision: null
+  temperature: null
+  structured_output_mode: json_schema
+  max_attempts: 3
+  timeout_seconds: 120
+tokenizer:
+  name: Salesforce/instructblip-flan-t5-xl
+  revision: bf9bd58cb3bb06e88c03b80f9cc346b90094bc6d
+context:
+  max_tokens: 384
+  format: untyped_bullets
+  padding: false
+output_dir: ../../artifacts/m3_atomic_llm_frozen_50
+cache_source: null
