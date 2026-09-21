@@ -1,0 +1,48 @@
+experiment: M4_support_filtered_token_matched_generation
+seed: 2026
+dataset:
+  name: goodnews
+  split: dev
+  max_samples: 50
+  subset_strategy: first_by_sample_id
+ids_50: ../dataset/goodnews_validation_50_ids.json
+primary_ids_49: ../dataset/m3_complete_49_ids.json
+model:
+  type: instructblip
+  name: Salesforce/instructblip-flan-t5-xl
+  revision: bf9bd58cb3bb06e88c03b80f9cc346b90094bc6d
+  device: auto
+  dtype: float16
+  batch_size: 1
+prompt:
+  instruction: Describe the image in one factual news-style sentence.
+  context_prefix: "Article context:\n"
+  context_suffix: "\n\n"
+context:
+  max_context_tokens: 384
+  truncation: head
+  budget_policy: frozen_atomic_token_matched_per_sample
+generation:
+  do_sample: false
+  num_beams: 3
+  max_new_tokens: 30
+  min_new_tokens: 1
+  no_repeat_ngram_size: 2
+  length_penalty: 1.0
+  early_stopping: true
+retrieval:
+  method: semantic
+  k: 3
+  model_name: openai/clip-vit-base-patch32
+  model_revision: b97b0100e55e367c057773c2a614676470b0d575
+evaluation:
+  metrics: [cider, entity]
+  entity_extractor: spacy
+  spacy_model: en_core_web_sm
+  allow_metric_errors: false
+analysis:
+  primary_sample_count: 49
+  excluded_sample_id: 4fd292608eb7c8105d86b39a_0
+  resamples: 10000
+  confidence: 0.95
+  seed: 2026
