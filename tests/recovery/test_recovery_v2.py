@@ -43,6 +43,7 @@ def test_deterministic_reconstruction_and_provenance(tmp_path: Path, monkeypatch
     outputs=[]
     for suffix in ("a_regenerated_v2", "b_regenerated_v2"):
         out=tmp_path/suffix
+        out.mkdir()  # Cloud mounts commonly pre-create an empty output directory.
         manifest=m3.reconstruct_token_matched(atomic_evidence=atomic,atomic_contexts_full=full,selected_evidence=selected,primary_ids=["s1"],output_dir=out,token_counter=lambda text:len(text.split()))
         assert manifest["recovery_status"] == "deterministically_reconstructed_from_partial_original_artifacts"
         assert manifest["every_reconstructed_sample_deterministic"] is True

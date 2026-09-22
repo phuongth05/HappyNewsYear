@@ -14,7 +14,7 @@ def main()->int:
     prediction_ids={str(row["sample_id"]) for row in predictions}
     if any(str(row.get("sample_id")) not in prediction_ids for row in regenerated): raise ValueError("regenerated claim has no regenerated prediction")
     matcher=CosineMatcher(COSINE_MODEL,COSINE_REVISION)
-    rows=map_reviewed_claims(originals,regenerated,matcher.score_pairs); out.mkdir(parents=True)
+    rows=map_reviewed_claims(originals,regenerated,matcher.score_pairs); out.mkdir(parents=True, exist_ok=True)
     fields=list(rows[0]) if rows else []
     with (out/"claim_mapping.csv").open("w",encoding="utf-8-sig",newline="") as h:
         w=csv.DictWriter(h,fieldnames=fields); w.writeheader(); w.writerows(rows)

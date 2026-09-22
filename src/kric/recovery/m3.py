@@ -65,7 +65,7 @@ def reconstruct_token_matched(
         raise ValueError("selected evidence hash mismatch")
     if not set(map(str, primary_ids)).issubset(set(atomic_ids)):
         raise ValueError("primary 49 IDs are not covered by recovery inputs")
-    output_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(atomic_evidence, output_dir / "atomic_evidence.jsonl")
     shutil.copyfile(atomic_contexts_full, output_dir / "atomic_contexts_full.jsonl")
     selected_by_id = {str(row["sample_id"]): row for row in selected}

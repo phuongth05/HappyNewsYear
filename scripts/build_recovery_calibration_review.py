@@ -18,7 +18,7 @@ def main()->int:
     while len(selected)<a.size and any(groups.values()):
         for key in keys:
             if groups[key] and len(selected)<a.size: selected.append(groups[key].pop(0))
-    out.mkdir(parents=True); fields=list(selected[0])
+    out.mkdir(parents=True, exist_ok=True); fields=list(selected[0])
     with (out/"human_review_recovery.csv").open("w",encoding="utf-8-sig",newline="") as h: w=csv.DictWriter(h,fieldnames=fields); w.writeheader(); w.writerows(selected)
     write_json(out/"sampling_manifest.json",{"claim_universe_status":"regenerated_non_deterministic","seed":2026,"target_size":a.size,"actual_size":len(selected),"old_threshold":a.old_threshold,"labels_prepopulated":False,"sampling":"variant/type stratified round-robin; near-threshold first"}); return 0
 if __name__=="__main__": raise SystemExit(main())

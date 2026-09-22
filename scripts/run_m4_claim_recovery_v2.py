@@ -14,7 +14,7 @@ def main()->int:
         variant,path=spec.split("=",1)
         if variant not in allowed or variant in sources:raise ValueError("sources must have unique known variants")
         sources[variant]=Path(path)
-    endpoint=LlmEndpointConfig(api_url=cfg["api_url"],model=cfg["model"],api_key_env=cfg["api_key_env"],model_revision=cfg.get("model_revision"),structured_output_mode=cfg["structured_output_mode"],temperature=cfg.get("temperature"),timeout_seconds=float(cfg["timeout_seconds"]),max_attempts=int(cfg["max_attempts"]));out.mkdir(parents=True);extractor=StructuredClaimExtractor(endpoint,out/"claim_response_cache.sqlite3");all_rows=[];failures=[];hashes={}
+    endpoint=LlmEndpointConfig(api_url=cfg["api_url"],model=cfg["model"],api_key_env=cfg["api_key_env"],model_revision=cfg.get("model_revision"),structured_output_mode=cfg["structured_output_mode"],temperature=cfg.get("temperature"),timeout_seconds=float(cfg["timeout_seconds"]),max_attempts=int(cfg["max_attempts"]));out.mkdir(parents=True, exist_ok=True);extractor=StructuredClaimExtractor(endpoint,out/"claim_response_cache.sqlite3");all_rows=[];failures=[];hashes={}
     for variant,path in sources.items():
         rows=read_jsonl(path);by={str(r["sample_id"]):r for r in rows}
         if any(i not in by for i in ids):raise ValueError(f"{variant} missing primary IDs")

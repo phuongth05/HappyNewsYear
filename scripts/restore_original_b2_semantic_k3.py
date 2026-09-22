@@ -11,7 +11,7 @@ def main()->int:
     out=a.output_dir.expanduser().resolve()
     if "_original_recovered" not in out.name: raise ValueError("historical restore output must use _original_recovered namespace")
     if out.exists() and any(out.iterdir()): raise FileExistsError(f"refusing to overwrite {out}")
-    prefix="semantic_k3/"; extracted=[]; out.mkdir(parents=True)
+    prefix="semantic_k3/"; extracted=[]; out.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(a.bundle) as archive:
         matches=[n for n in archive.namelist() if n.replace('\\','/').split('goodnews_b2_validation_50/',1)[-1].startswith(prefix)]
         if not matches: raise ValueError("bundle has no semantic_k3 directory")
