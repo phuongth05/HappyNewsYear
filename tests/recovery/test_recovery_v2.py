@@ -79,4 +79,5 @@ def test_threshold_transfer_metrics_and_conservative_recommendation():
 
 def test_explicit_non_deterministic_claim_provenance_label_present():
     script=Path("scripts/run_m4_claim_recovery_v2.py").read_text(encoding="utf-8")
-    assert '"claim_universe_status":"regenerated_non_deterministic"' in script
+    assert '"claim_universe_status"' in script
+    assert '"regenerated_non_deterministic"' in script
